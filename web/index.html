@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HoneyThumb</title>
+<meta name="theme-color" content="#131312">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="thumb.css">
+</head>
+<body>
+
+<!-- ───────── Übersicht ───────── -->
+<section id="home" class="screen hidden">
+  <header class="bar">
+    <div class="brand"><img src="icon.svg" alt="">HoneyThumb</div>
+    <span class="grow"></span>
+    <button class="btn ghost" id="homeImport" title="Bild oder .honeythumb-Datei öffnen">⤓<span class="d-only"> Öffnen</span></button>
+    <button class="btn primary" id="homeNew">＋ Neu<span class="d-only">es Titelbild</span></button>
+  </header>
+  <div class="home-body">
+    <div id="thumbList" class="thumb-grid"></div>
+    <div id="homeEmpty" class="empty hidden">
+      <h2>Noch keine Titelbilder</h2>
+      <p>Wähle eine Vorlage, setze ein Bild von dir ein und schreibe den Titel dazu. HoneyThumb stellt die Person frei und tauscht den Hintergrund.</p>
+      <button class="btn primary" id="emptyNew">＋ Erstes Titelbild</button>
+    </div>
+  </div>
+</section>
+
+<!-- ───────── Editor ───────── -->
+<section id="ed" class="screen hidden">
+  <header class="bar ed-bar">
+    <button class="icon-btn" id="edBack" title="Zur Übersicht" aria-label="Zur Übersicht">‹</button>
+    <input id="edName" class="name-in" spellcheck="false" aria-label="Name des Titelbilds">
+    <label class="sel-lbl d-only" title="Format des Titelbilds"><span>Format</span><select id="edFmt"></select></label>
+    <button class="icon-btn acc-btn" id="edAcc" title="Akzentfarbe" aria-label="Akzentfarbe"><i></i></button>
+    <span class="grow"></span>
+    <span class="saved d-only" id="saved"></span>
+    <button class="icon-btn" id="undoBtn" title="Rückgängig (Strg+Z)" aria-label="Rückgängig">↶</button>
+    <button class="icon-btn" id="redoBtn" title="Wiederholen (Strg+Umschalt+Z)" aria-label="Wiederholen">↷</button>
+    <button class="icon-btn c-only" id="edMore" title="Format und Datei" aria-label="Mehr">⋯</button>
+    <button class="btn primary" id="edExport" title="Als Bild speichern">⤒<span class="d-only"> Exportieren</span></button>
+  </header>
+
+  <div class="ed-body">
+    <aside class="pane left-pane" id="paneL">
+      <div class="tabs" id="leftTabs"><button data-t="tpl" class="on">Vorlagen</button><button data-t="layers">Ebenen</button></div>
+      <div id="tplGrid" class="pane-body tpl-grid"></div>
+      <div id="layerList" class="pane-body hidden"></div>
+    </aside>
+
+    <main class="stage-pane" id="paneStage">
+      <div class="stage-wrap" id="stageWrap">
+        <div class="stage-box" id="stageBox">
+          <canvas id="stage"></canvas>
+          <div class="guide v hidden" id="guideV"></div><div class="guide h hidden" id="guideH"></div>
+          <div class="sel hidden" id="sel">
+            <i data-h="nw"></i><i data-h="n"></i><i data-h="ne"></i><i data-h="e"></i><i data-h="se"></i><i data-h="s"></i><i data-h="sw"></i><i data-h="w"></i><i data-h="rot" title="Drehen"></i>
+          </div>
+        </div>
+      </div>
+      <div class="add-bar" id="addBar">
+        <button class="btn" data-add="person" title="Bild wählen – HoneyThumb stellt die Person frei">＋ Person freistellen</button>
+        <button class="btn" data-add="text">＋ Text</button>
+        <button class="btn" data-add="img" title="Bild, Screenshot oder Logo">＋ Bild</button>
+        <button class="btn" data-add="shape">＋ Form</button>
+        <button class="btn" data-add="icon">＋ Symbol</button>
+      </div>
+      <p class="muted small warn hidden" id="warn"></p>
+    </main>
+
+    <aside class="pane insp-pane" id="paneInsp">
+      <div class="pane-head"><b id="inspTitle">Hintergrund</b></div>
+      <div id="insp" class="pane-body insp"></div>
+    </aside>
+  </div>
+
+  <nav class="mob-tabs" id="mobTabs">
+    <button data-t="tpl">Vorlagen</button>
+    <button data-t="insp" class="on">Bearbeiten</button>
+    <button data-t="layers">Ebenen</button>
+  </nav>
+</section>
+
+<div id="modal" class="modal hidden"><div class="modal-card" id="modalCard"></div></div>
+<div id="busy" class="busy hidden"><div><span class="spin"></span><span id="busyMsg"></span></div></div>
+<div id="toast"></div>
+<input type="file" id="fileIn" class="hidden" accept=".honeythumb,.json,image/*">
+<input type="file" id="imgIn" class="hidden" accept="image/*">
+
+<script src="thumb-icons.js"></script>
+<script src="thumb-engine.js"></script>
+<script src="thumb-cut.js"></script>
+<script src="thumb-app.js"></script>
+</body>
+</html>
