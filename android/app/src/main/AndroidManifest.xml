@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Die Personenerkennung (MediaPipe) wird beim ersten Freistellen aus dem Netz geladen. Bilder verlassen das Gerät nicht. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:label="HoneyThumb"
         android:icon="@mipmap/ic_launcher"
