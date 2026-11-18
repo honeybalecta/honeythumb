@@ -124,9 +124,12 @@
   // Balken hinter dem Text als Pinselstrich („brush“) oder gerissenes Papier („torn“): unruhige Kanten, Flecken, kleine Fehlstellen
   function barPath(g, x, y, w, h, style, R, u){
     const pts = [], edge = (x0, y0, x1, y1, nx, ny, amp, step) => { const n = Math.max(2, Math.round(Math.hypot(x1 - x0, y1 - y0) / step)); for (let i = 0; i < n; i++){ const t = i / n, d = (R() * 2 - 1) * amp; pts.push([x0 + (x1 - x0) * t + nx * d, y0 + (y1 - y0) * t + ny * d]); } };
+    // Pinselstrich: Ober- und Unterkante fast gerade, die Enden weich gewellt (wenige Stützwerte, dazwischen sanft überblendet) – die Borsten kommen in drawBar dazu
+    const wave = (x0, y0, x1, y1, amp, step) => { const n = Math.max(4, Math.round(Math.hypot(x1 - x0, y1 - y0) / step)), k = 5, c = []; for (let i = 0; i <= Math.ceil(n / k) + 1; i++) c.push(R() * 2 - 1);
+      for (let i = 0; i < n; i++){ const t = i / n, a = Math.floor(i / k), f = (1 - Math.cos((i % k) / k * Math.PI)) / 2, d = (c[a] * (1 - f) + c[a + 1] * f) * amp + (R() - 0.5) * amp * 0.18; pts.push([x0 + (x1 - x0) * t + d, y0 + (y1 - y0) * t]); } };
     if (style === 'brush'){ const e = u * 0.3;
-      edge(x - e * R(), y, x + w + e * R(), y, 0, 1, u * 0.03, u * 0.22); edge(x + w + e * 0.5, y, x + w + e * 0.5, y + h, 1, 0, e * 0.6, u * 0.06);
-      edge(x + w + e * R(), y + h, x - e * R(), y + h, 0, 1, u * 0.03, u * 0.22); edge(x - e * 0.5, y + h, x - e * 0.5, y, 1, 0, e * 0.6, u * 0.06); }
+      edge(x - e * 0.3, y, x + w + e * 0.3, y, 0, 1, u * 0.022, u * 0.3); wave(x + w + e * 0.3, y, x + w + e * 0.3, y + h, e * 0.4, u * 0.035);
+      edge(x + w + e * 0.3, y + h, x - e * 0.3, y + h, 0, 1, u * 0.022, u * 0.3); wave(x - e * 0.3, y + h, x - e * 0.3, y, e * 0.4, u * 0.035); }
     else { const a = u * 0.04, st = u * 0.09; edge(x, y, x + w, y, 0, 1, a, st); edge(x + w, y, x + w, y + h, 1, 0, a, st); edge(x + w, y + h, x, y + h, 0, 1, a, st); edge(x, y + h, x, y, 1, 0, a, st); }
     g.beginPath(); pts.forEach((p, i) => g[i ? 'lineTo' : 'moveTo'](p[0], p[1])); g.closePath();
   }
@@ -139,7 +142,10 @@
   }
   function drawBar(ctx, x, y, w, h, box, R, u){
     const pad = Math.ceil(u * 0.5), c = mkCanvas(w + 2 * pad, h + 2 * pad), g = c.getContext('2d'), col = box.c, dark = lum(/^#[0-9a-f]{6}$/i.test(col) ? col : '#888888') < 0.5, brush = box.style === 'brush';
-    g.translate(pad, pad); barPath(g, 0, 0, w, h, box.style, R, u); g.fillStyle = col; g.fill(); g.save(); g.clip();
+    g.translate(pad, pad); barPath(g, 0, 0, w, h, box.style, R, u); g.fillStyle = col; g.fill();
+    // Borsten: schmale Ausläufer an beiden Enden des Pinselstrichs
+    if (brush) for (let i = 0, n = Math.round(h / u * 9); i < n; i++){ const th = u * (0.018 + R() * 0.05), len = u * (0.1 + R() * R() * 0.4), yy = R() * (h - th), left = R() < 0.5; rr(g, left ? -u * 0.1 - len : w + u * 0.1 - u * 0.05, yy, len + u * 0.05, th, th / 2); g.fill(); }
+    barPath(g, 0, 0, w, h, box.style, rng(1 + Math.floor(R() * 1e9)), u); g.save(); g.clip();
     if (brush){ g.strokeStyle = rgba('#000000', 0.16); g.lineCap = 'round'; for (let i = 0, n = Math.round(h / u * 14); i < n; i++){ const yy = R() * h, x0 = R() * w, len = (0.15 + R() * 0.6) * w; g.lineWidth = u * (0.01 + R() * 0.035); g.globalAlpha = 0.4 + R() * 0.6; g.beginPath(); g.moveTo(x0, yy); g.lineTo(x0 + len, yy + (R() - 0.5) * u * 0.04); g.stroke(); } g.globalAlpha = 1; }
     g.fillStyle = brush ? rgba('#000000', 0.22) : rgba(dark ? '#FFFFFF' : '#000000', 0.07);
     for (let i = 0, n = Math.round(w * h / (u * u) * (brush ? 9 : 5)); i < n; i++){ const rr = u * (brush ? 0.02 + R() * 0.06 : 0.05 + R() * 0.16); g.beginPath(); g.ellipse(R() * w, R() * h, rr, rr * (0.5 + R()), R() * 3, 0, Math.PI * 2); g.fill(); }
@@ -302,6 +308,17 @@
         P(C, 'sub', F.w * 0.2, F.h * 0.7, F.w * 0.6, F.h * 0.215, {align: 'c'}),
         W(C, F.w * 0.4, F.h * 0.635, F.w * 0.2, F.h * 0.085, {}),
       ] : [bg({kind: 'img', slot: 'photo', vig: 0.25}), ...stack(F, C, 0.36)]},
+      {id: 'pinsel-3', n: 'Pinselbalken, drei Zeilen', dark: true, needs: ['photo'], build: (F, C) => { const paper = {c: '#DEDBD5', pad: 0.14, mode: 'block', style: 'torn'}; return F.wide ? [
+        bg({kind: 'img', slot: 'photo', vig: 0.25}),
+        P(C, 'title', F.w * 0.33, F.h * 0.3, F.w * 0.64, F.h * 0.2, {text: 'ZWEITE ZEILE', box: {c: PAL.ink, pad: 0.14, mode: 'block', style: 'torn'}}),
+        P(C, 'sub', F.w * 0.3, F.h * 0.55, F.w * 0.64, F.h * 0.215, {text: 'DRITTE ZEILE', color: C.acc, box: paper}),
+        W(C, F.w * 0.3, F.h * 0.12, F.w * 0.5, F.h * 0.15, {text: 'ERSTE ZEILE', upper: true, size: 130, align: 'l', box: {...paper, pad: 0.2}}),
+      ] : [
+        bg({kind: 'img', slot: 'photo', vig: 0.25}),
+        P(C, 'title', F.w * 0.04, F.h * 0.5, F.w * 0.92, F.h * 0.13, {align: 'c', size: 180, text: 'ZWEITE ZEILE', box: {c: PAL.ink, pad: 0.14, mode: 'block', style: 'torn'}}),
+        P(C, 'sub', F.w * 0.04, F.h * 0.66, F.w * 0.92, F.h * 0.13, {align: 'c', size: 180, text: 'DRITTE ZEILE', color: C.acc, box: paper}),
+        W(C, F.w * 0.08, F.h * 0.4, F.w * 0.84, F.h * 0.08, {text: 'ERSTE ZEILE', upper: true, size: 110, box: {...paper, pad: 0.2}}),
+      ]; }},
       {id: 'pinsel-p', n: 'Pinselbalken mit Person', dark: true, needs: ['person'], build: (F, C) => F.wide ? [
         bg({kind: 'img', slot: 'photo', dim: 0.35, gray: true, vig: 0.3}),
         im('person', -F.w * 0.02, F.h * 0.06, F.w * 0.44, F.h * 1.01, {shadow}),
@@ -479,6 +496,9 @@
   function newLayer(doc, type, o = {}){
     const F = format(doc.format), u = Math.min(F.w, F.h), dark = lum(bgColor(doc)) < 0.5, base = {id: uid(), type, user: true};
     if (type === 'text') return {...base, text: 'TEXT', x: F.w * 0.1, y: F.h * 0.38, w: F.w * 0.8, h: F.h * 0.24, font: 'anton', size: u * 0.2, color: dark ? PAL.cream : PAL.ink, align: 'c', valign: 'm', lh: 1.04, upper: true, fit: true, ...o};
+    if (type === 'bar'){ const k = o.kind, tf = doc.tfonts || {}, own = v => FONTS.some(x => x.k === v) ? v : null, small = k === 'paper'; delete o.kind;
+      return {...base, type: 'text', text: small ? 'gegen' : 'TEXT', x: F.w * (small ? 0.38 : 0.2), y: F.h * (small ? 0.455 : 0.4), w: F.w * (small ? 0.24 : 0.6), h: F.h * (small ? 0.09 : 0.2) * (F.w > F.h ? 1 : 0.6), font: small ? own(tf.small) || 'typewriter' : own(tf.title) || 'anton', size: u * (small ? 0.09 : 0.22),
+        color: small ? PAL.ink : PAL.white, align: 'c', valign: 'm', lh: 1.0, upper: !small, fit: true, rot: -3, rough: small ? 0.3 : 0.45, box: {c: k === 'brush' ? doc.accent || ACCENTS[0].dark : small ? '#E9E6E0' : PAL.ink, pad: small ? 0.38 : 0.14, mode: 'block', style: k === 'brush' ? 'brush' : 'torn'}, ...o}; }
     if (type === 'shape') return {...base, shape: 'rect', x: F.w / 2 - u * 0.15, y: F.h / 2 - u * 0.15, w: u * 0.3, h: o.shape === 'line' ? u * 0.03 : o.shape === 'arrow' ? u * 0.18 : u * 0.3, fill: doc.accent || ACCENTS[0].dark, ...o};
     if (type === 'icon') return {...base, icon: 'megafon', x: F.w / 2 - u * 0.15, y: F.h / 2 - u * 0.15, w: u * 0.3, h: u * 0.3, color: dark ? PAL.cream : PAL.ink, ...o};
     if (type === 'img'){ const r = o.ratio || 1, h = u * 0.7, w = Math.min(F.w * 0.9, h * r); delete o.ratio; return {...base, x: F.w / 2 - w / 2, y: F.h / 2 - w / r / 2, w, h: w / r, fit: 'contain', pos: {x: 0.5, y: 0.5}, ...o}; }

@@ -206,6 +206,13 @@ try {
   await ev(() => HT.select(HT.doc.layers.find(l => l.slot === 'title').id)); await sleep(100);
   await page.click('#insp [data-k="box.style"][data-j=\'"torn"\']'); await sleep(150);
   chk('Balkenart, Farbe und raue Schrift stehen bei den Eigenschaften des Texts', await ev(() => HT.doc.layers.find(l => l.slot === 'title').box.style === 'torn' && !!document.querySelector('#insp [data-k="rough"]') && !!document.querySelector('#insp [data-act="seed"]') && !!document.querySelector('#insp [data-k="box.c"]')));
+  await page.click('#addBar [data-add="bar"]'); await page.click('[data-b="brush"]'); await sleep(200);
+  const bb = await ev(() => { const l = HT.doc.layers.find(x => x.id === HT.sel), F = HoneyThumb.format(HT.doc.format); return { type: l.type, style: l.box.style, c: l.box.c.toLowerCase(), rot: l.rot, rough: l.rough, user: l.user, inside: l.x >= 0 && l.x + l.w <= F.w, ta: !!document.querySelector('#insp textarea') }; });
+  chk('„＋ Balken“ legt einen Text auf einem Pinselstrich in der Akzentfarbe dazu – gedreht, rau, gleich bearbeitbar', bb.type === 'text' && bb.style === 'brush' && bb.c === '#6f9bea' && bb.rot === -3 && bb.rough > 0 && bb.user && bb.inside && bb.ta, bb);
+  await page.click('#tplGrid [data-t="pinsel-3"]'); await sleep(250);
+  const p3 = await ev(() => { const g = s => HT.doc.layers.find(l => l.slot === s), ys = ['kicker', 'title', 'sub'].map(s => g(s).y); return { order: ys[0] < ys[1] && ys[1] < ys[2], k: [g('kicker').upper, g('kicker').box.style], t: g('title').box.c.toLowerCase(), s: [g('sub').color.toLowerCase(), g('sub').box.style], eigen: HT.doc.layers.some(l => l.user && l.box && l.box.style === 'brush') }; });
+  chk('„Pinselbalken, drei Zeilen“: Papier, Schwarz, Papier mit Schrift in der Akzentfarbe; der eigene Balken bleibt', p3.order && p3.k.join() === 'true,torn' && p3.t === '#131312' && p3.s.join() === '#6f9bea,torn' && p3.eigen, p3);
+  await page.click('#tplGrid [data-t="pinsel"]'); await sleep(250);
   // Eigene Schrift: eine Schriftdatei aus dem Programm dient als Beispiel
   const fnt = await ev(async () => { const b = await (await fetch('fonts/Oswald-SemiBold.ttf')).blob(), it = await HT.libAddFont(new File([b], 'Meine_Titelschrift.ttf')); return { id: it.id, name: it.name, list: HoneyThumb.FONTS.some(f => f.k === 'u:' + it.id), bad: await HT.libAddFont(new File([new Uint8Array(500)], 'kaputt.ttf')).then(() => false, e => e.message) }; });
   chk('Eine Schriftdatei kommt in die Markenunterlagen und steht bei den Schriften zur Wahl; eine kaputte Datei wird abgelehnt', fnt.name === 'Meine Titelschrift' && fnt.list && /keine lesbare/.test(fnt.bad), fnt);
