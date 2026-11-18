@@ -49,6 +49,16 @@ try {
   await page.mouse.click(...(await ev(() => { const r = document.querySelector('#stageBox').getBoundingClientRect(); return [r.left + r.width * 0.5, r.top + r.height * 0.3]; }))); await sleep(100);
   chk('Ein Klick ins Bild greift nie die gesperrte Auflage', await ev(() => { const l = HT.doc.layers.find(x => x.id === HT.sel); return !l || !l.top; }));
 
+  // ═════════ Nur über der Auflage ═════════
+  await page.click('#addBar [data-add="shape"]'); await page.click('[data-s="rect"]'); await sleep(200);
+  const fr0 = await ev(() => { const l = HT.doc.layers.find(x => x.id === HT.sel), F = HoneyThumb.format(HT.doc.format); return { id: l.id, cy: (l.y + l.h / 2) / F.h, bottom: (l.y + l.h) / F.h, x: l.x, y: l.y, w: l.w, h: l.h }; });
+  chk('Ein neues Element kommt in die Mitte der freien Fläche über dem Banner', Math.abs(fr0.cy - 0.4) < 0.02 && fr0.bottom < 0.8, fr0);
+  { const pt = (x, y) => ev(([x, y]) => { const r = document.querySelector('#stageBox').getBoundingClientRect(); return [r.left + x * HT.scale, r.top + y * HT.scale]; }, [x, y]);
+    const a = await pt(fr0.x + fr0.w / 2, fr0.y + fr0.h / 2), b = await pt(fr0.x + fr0.w / 2, 1580); await page.mouse.move(...a); await page.mouse.down(); await page.mouse.move(a[0], (a[1] + b[1]) / 2, { steps: 4 }); await page.mouse.move(...b, { steps: 4 }); await page.mouse.up(); await sleep(150); }
+  const fr1 = await ev(() => { const l = HT.doc.layers.find(x => x.id === HT.sel), F = HoneyThumb.format(HT.doc.format); return { bottom: (l.y + l.h) / F.h }; });
+  chk('Ins Banner lässt es sich nicht ziehen: Es bleibt ganz in der freien Fläche und liegt an der Kante des Banners an', fr1.bottom <= 0.801 && fr1.bottom > 0.79, fr1);
+  await ev(() => HT.act('del')); await sleep(150);
+
   // ═════════ Vorlage wechseln ═════════
   await ev(() => document.querySelector('#leftTabs [data-t="tpl"]').click()); await sleep(700);
   chk('Die Vorschauen der Vorlagen zeigen die Auflage mit', near(await ev(() => { const c = document.querySelector('#tplGrid [data-t="balken"] canvas'), d = c.getContext('2d').getImageData(Math.round(c.width * 0.05), Math.round(c.height * 0.97), 1, 1).data; return [d[0], d[1], d[2]]; }), BLAU));

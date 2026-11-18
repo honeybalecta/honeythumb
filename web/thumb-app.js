@@ -336,6 +336,8 @@
       for (const [v, g] of [[f.w / 2 - L.w / 2, f.w / 2], [0, 0], [f.w - L.w, f.w], [f.w * 0.05, f.w * 0.05], [f.w * 0.95 - L.w, f.w * 0.95]]) if (Math.abs(x - v) < thr){ x = v; gv = g; break; }
       for (const [v, g] of [[f.h / 2 - L.h / 2, f.h / 2], [0, 0], [f.h - L.h, f.h], [f.h * 0.05, f.h * 0.05], [f.h * 0.95 - L.h, f.h * 0.95]]) if (Math.abs(y - v) < thr){ y = v; gh = g; break; }
       if (e.shiftKey){ if (Math.abs(dx) > Math.abs(dy)) y = o.y; else x = o.x; }
+      // Unter einer Auflage ist kein Platz: Texte, Formen und Symbole bleiben ganz in der freien Fläche, Bilder mit ihrer Mitte (eine Person darf hinter dem Banner enden); die Unterkante rastet an der Kante der Auflage ein
+      const fa = freeArea(); if (fa.on && !L.top){ if (Math.abs(y + L.h - fa.y1) < thr && gh == null){ y = fa.y1 - L.h; gh = fa.y1; } if (Math.abs(y - fa.y0) < thr && fa.y0 > 0 && gh == null){ y = fa.y0; gh = fa.y0; } const half = L.type === 'img' ? L.h / 2 : 0; y = H.clamp(y, Math.min(fa.y0 - half, fa.y1 - L.h + half), Math.max(fa.y1 - L.h + half, fa.y0 - half)); }
       L.x = x; L.y = y; guides(gv, gh); }
     else if (drag.mode === 'rot'){ const cx = o.x + o.w / 2, cy = o.y + o.h / 2; let a = Math.atan2(p.y - cy, p.x - cx) * 180 / Math.PI + 90; a = ((a + 540) % 360) - 180;
       const st = e.shiftKey ? 15 : 45, near = Math.round(a / st) * st; if (e.shiftKey || Math.abs(a - near) < 3) a = near; L.rot = Math.round(a * 10) / 10; }
@@ -380,7 +382,10 @@
   // ───────── Hinzufügen ─────────
   // Eine Person steht unten in der freien Fläche (über einer Auflage am unteren Rand)
   function standPerson(L, ratio){ const f = F(), ins = H.topInset(doc.layers, f), fh = f.h * (1 - ins.t - ins.b); L.h = fh * 0.92; L.w = L.h * ratio; if (L.w > f.w * 1.1){ L.w = f.w * 1.1; L.h = L.w / ratio; } L.x = f.w / 2 - L.w / 2; L.y = f.h * ins.t + fh * 1.02 - L.h; return L; }
-  function addLayer(L){ doc.layers.push(L); commit(); select(L.id); setMob('insp'); return L; }
+  // Freie Fläche über bzw. unter den Auflagen (Entwurfspixel): Neues kommt dorthin, und beim Ziehen bleibt die Mitte einer Ebene darin
+  function freeArea(){ const f = F(), ins = H.topInset(doc.layers, f); return {y0: f.h * ins.t, y1: f.h * (1 - ins.b), on: ins.t + ins.b > 0}; }
+  function intoFree(L){ const a = freeArea(); if (!a.on || L.top) return L; const fh = a.y1 - a.y0; if (L.h > fh * 0.9){ const k = fh * 0.9 / L.h, cx = L.x + L.w / 2; L.w *= k; L.h *= k; L.x = cx - L.w / 2; if (L.size) L.size *= k; } L.y = a.y0 + (fh - L.h) / 2; return L; }
+  function addLayer(L){ intoFree(L); doc.layers.push(L); commit(); select(L.id); setMob('insp'); return L; }
   $('#addBar').addEventListener('click', async e => {
     const b = e.target.closest('[data-add]'); if (!b) return; const k = b.dataset.add;
     if (k === 'text'){ addLayer(H.newLayer(doc, 'text')); const t = $('#insp textarea'); if (t && !compact()){ t.focus(); t.select(); } }
