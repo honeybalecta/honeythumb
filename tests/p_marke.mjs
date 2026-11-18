@@ -1,4 +1,4 @@
-// HoneyThumb 1.2: Markenunterlagen – Personen, Auflagen (immer ganz oben, je Format, „immer dabei“), Grafiken, Hintergründe; freie Fläche der Vorlagen unter einer Auflage;
+// HoneyThumb 1.3: Pinselbalken-Vorlagen, raue Schrift, eigene Schriften; Markenunterlagen – Personen, Auflagen (immer ganz oben, je Format, „immer dabei“), Grafiken, Hintergründe; freie Fläche der Vorlagen unter einer Auflage;
 // Formatwechsel, Rückgängig, Hinterlegen aus dem Titelbild, Neustart, mehrere Marken, eine Marke im Ganzen als Datei, Handy-Ansicht.
 import { launch, sleep, pruefung, FOTO } from './drv.mjs';
 const { chk, ende } = pruefung('HoneyThumb – Markenunterlagen');
@@ -18,7 +18,7 @@ try {
   // ═════════ Ablage in der Übersicht ═════════
   await page.click('#homeLib'); await page.waitForSelector('.modal-card.lib [data-lk]');
   const l0 = await ev(() => ({ marke: document.querySelector('#lbBrand').selectedOptions[0].textContent, tabs: [...document.querySelectorAll('.modal-card.lib [data-lk]')].map(b => b.textContent), leer: !!document.querySelector('.lib-grid .hint'), add: document.querySelector('[data-lb="add"]').textContent, save: document.querySelector('[data-lb="save"]').disabled }));
-  chk('Die Markenunterlagen haben vier Reiter – Personen, Auflagen, Grafiken, Hintergründe – und sind anfangs leer; es gibt die Marke „Meine Marke“', l0.tabs.join() === 'Personen,Auflagen,Grafiken,Hintergründe' && l0.marke === 'Meine Marke' && l0.leer && /Person/.test(l0.add) && l0.save, l0);
+  chk('Die Markenunterlagen haben fünf Reiter – Personen, Auflagen, Grafiken, Hintergründe, Schriften – und sind anfangs leer; es gibt die Marke „Meine Marke“', l0.tabs.join() === 'Personen,Auflagen,Grafiken,Hintergründe,Schriften' && l0.marke === 'Meine Marke' && l0.leer && /Person/.test(l0.add) && l0.save, l0);
   await page.click('[data-lb="x"]');
 
   // ═════════ Auflage hinterlegen ═════════
@@ -195,6 +195,36 @@ try {
   await page.reload(); await page.waitForFunction(() => window.HT && HT.brand && !document.querySelector('#home').classList.contains('hidden'));
   const m5 = await ev(() => ({ name: HT.brand.name, ov: HT.lib.find(i => i.kind === 'overlay').brand === HT.brand.id, n: HT.brands.length }));
   chk('Nach einem Neustart ist dieselbe Marke gewählt; ein Eintrag ohne Marke (aus 1.1.0) kommt in die gewählte', m5.name === 'Katrin Fey' && m5.ov && m5.n === 2, m5);
+
+  // ═════════ Pinselbalken-Vorlagen, raue Schrift, eigene Schriften ═════════
+  await page.click('#homeNew'); await page.waitForSelector('#ndGrid canvas'); await page.click('#ndFmt [data-f="16:9"]'); await page.click('#ndGrid [data-t="pinsel"]'); await page.waitForFunction(() => HT.doc); await sleep(250);
+  const pv1 = await ev(() => { const g = s => HT.doc.layers.find(l => l.slot === s); return { t: [g('title').box.style, g('title').rot, g('title').rough > 0, g('title').font], k: [g('kicker').box.style, g('kicker').font, g('kicker').upper], s: [g('sub').box.style, g('sub').box.c], acc: g('title').box.c.toLowerCase(), bg: HT.doc.layers[0].fill.kind }; });
+  chk('„Pinselbalken unten“: Bild als Hintergrund, Titel auf Pinselstrich in der Akzentfarbe der Marke, kleines Wort in Schreibmaschine auf Papier, zweite Zeile auf Schwarz – leicht gedreht, raue Schrift', pv1.t.join() === 'brush,-3,true,anton' && pv1.k.join() === 'torn,typewriter,false' && pv1.s[0] === 'torn' && pv1.acc === '#6f9bea' && pv1.bg === 'img', pv1);
+  const pv2 = await ev(() => { const H = HoneyThumb, d = H.clone(HT.doc), t = d.layers.find(l => l.slot === 'title'), cnt = dd => { const c = H.render(dd, 800), px = c.getContext('2d').getImageData(0, 0, 800, 450).data; let blue = 0, white = 0; for (let i = 0; i < px.length; i += 4){ if (px[i + 2] > 180 && px[i] < 160) blue++; if (px[i] > 235 && px[i + 1] > 235 && px[i + 2] > 235) white++; } return { blue, white }; };
+    const a = cnt(d), a2 = cnt(d); t.rough = 0; const b = cnt(d); t.rough = 0.45; t.box.style = 'rect'; const c = cnt(d); t.box.style = 'brush'; t.seed = 12345; const e = cnt(d); return { a, a2, b, c, e }; });
+  chk('Das Muster ist bei jedem Zeichnen dasselbe; raue Schrift hat Fehlstellen; der Pinselstrich hat eine andere Form als der glatte Balken; „Anderes Muster“ ändert es', pv2.a.blue === pv2.a2.blue && pv2.a.white === pv2.a2.white && pv2.b.white > pv2.a.white * 1.02 && pv2.c.blue !== pv2.a.blue && pv2.e.blue !== pv2.a.blue && pv2.a.blue > 5000, pv2);
+  await ev(() => HT.select(HT.doc.layers.find(l => l.slot === 'title').id)); await sleep(100);
+  await page.click('#insp [data-k="box.style"][data-j=\'"torn"\']'); await sleep(150);
+  chk('Balkenart, Farbe und raue Schrift stehen bei den Eigenschaften des Texts', await ev(() => HT.doc.layers.find(l => l.slot === 'title').box.style === 'torn' && !!document.querySelector('#insp [data-k="rough"]') && !!document.querySelector('#insp [data-act="seed"]') && !!document.querySelector('#insp [data-k="box.c"]')));
+  // Eigene Schrift: eine Schriftdatei aus dem Programm dient als Beispiel
+  const fnt = await ev(async () => { const b = await (await fetch('fonts/Oswald-SemiBold.ttf')).blob(), it = await HT.libAddFont(new File([b], 'Meine_Titelschrift.ttf')); return { id: it.id, name: it.name, list: HoneyThumb.FONTS.some(f => f.k === 'u:' + it.id), bad: await HT.libAddFont(new File([new Uint8Array(500)], 'kaputt.ttf')).then(() => false, e => e.message) }; });
+  chk('Eine Schriftdatei kommt in die Markenunterlagen und steht bei den Schriften zur Wahl; eine kaputte Datei wird abgelehnt', fnt.name === 'Meine Titelschrift' && fnt.list && /keine lesbare/.test(fnt.bad), fnt);
+  await page.click('#addBar [data-add="lib"]'); await page.click('[data-lk="font"]'); await page.click('.lib-card [data-lrole="title"]'); await sleep(150); await page.click('[data-lb="x"]');
+  const sf1 = await ev(async id => { HT.select(HT.doc.layers.find(l => l.slot === 'title').id); const sel = [...document.querySelectorAll('#insp select[data-k="font"] option')].some(o => o.value === 'u:' + id); const t = HT.doc.layers.find(l => l.slot === 'title'); t.font = 'u:' + id; HT.commit();
+    const file = JSON.stringify(HoneyThumb.prune(HoneyThumb.clone(HT.doc))), back = HoneyThumb.parse(file); return { sel, role: HT.brand.fonts.title === 'u:' + id, packed: Object.keys(HT.doc.fonts || {}).join() === 'u:' + id, back: !!(back.fonts && back.fonts['u:' + id] && back.layers.find(l => l.slot === 'title').font === 'u:' + id) }; }, fnt.id);
+  chk('Die Schrift lässt sich einem Text geben und als Titelschrift der Marke festlegen; sie reist in der Datei .honeythumb mit', sf1.sel && sf1.role && sf1.packed && sf1.back, sf1);
+  await ev(() => document.querySelector('#edBack').click()); await page.waitForFunction(() => !document.querySelector('#home').classList.contains('hidden'));
+  await page.click('#homeNew'); await page.waitForSelector('#ndGrid canvas'); await page.click('#ndGrid [data-t="pinsel-p"]'); await page.waitForFunction(() => HT.doc); await sleep(250);
+  const sf2 = await ev(id => { const g = s => HT.doc.layers.find(l => l.slot === s); return { t: g('title').font === 'u:' + id, s: g('sub').font === 'u:' + id, k: g('kicker').font, p: !!g('person') }; }, fnt.id);
+  chk('Neue Pinselbalken-Titelbilder der Marke nehmen ihre Titelschrift; das kleine Wort bleibt Schreibmaschine', sf2.t && sf2.s && sf2.k === 'typewriter' && sf2.p, sf2);
+  await page.click('#tplGrid [data-t="pinsel-m"]'); await sleep(250);
+  chk('Beim Wechsel der Vorlage bleibt die Schrift der Marke', await ev(id => HT.doc.layers.find(l => l.slot === 'title').font === 'u:' + id && !!HT.doc.fonts, fnt.id));
+  await ev(() => document.querySelector('#edBack').click()); await page.waitForFunction(() => !document.querySelector('#home').classList.contains('hidden'));
+  await page.click('#homeLib');
+  const [dl2] = await Promise.all([page.waitForEvent('download'), page.click('[data-lb="save"]')]);
+  const mk2 = JSON.parse((await import('node:fs')).readFileSync(await dl2.path(), 'utf8'));
+  chk('Die Datei der Marke enthält die Schrift und ihre Rolle', mk2.items.some(i => i.kind === 'font' && /^data:font\/ttf;base64,/.test(i.url)) && mk2.brand.fonts.title === 'u:' + fnt.id, { f: mk2.brand.fonts });
+  await page.click('[data-lb="x"]');
   await browser.close();
 
   // ═════════ Handy-Ansicht ═════════
@@ -202,7 +232,7 @@ try {
   await ev(async src => { await HT.libAddImage('overlay', eval(src), { name: 'Banner' }); }, BANNER);
   await page.click('#homeNew'); await page.waitForSelector('#ndGrid canvas'); await page.click('#ndFmt [data-f="9:16"]'); await page.click('#ndGrid [data-t="rechts"]'); await page.waitForFunction(() => HT.doc); await sleep(250);
   await page.click('#addBar [data-add="lib"]'); await page.click('[data-lk="overlay"]'); await sleep(150);
-  const hy = await ev(() => { const c = document.querySelector('.modal-card.lib').getBoundingClientRect(), k = document.querySelector('.lib-card').getBoundingClientRect(), g = document.querySelector('.lib-card .go').getBoundingClientRect(); return { tabs: [...document.querySelectorAll('.modal-card.lib [data-lk]')].every(b => b.scrollWidth <= b.clientWidth + 1), w: c.width, bottom: c.bottom, inW: k.right <= 390 && k.left >= 0, go: g.height >= 24, over: document.documentElement.scrollWidth <= 390 }; });
+  const hy = await ev(() => { const c = document.querySelector('.modal-card.lib').getBoundingClientRect(), k = document.querySelector('.lib-card').getBoundingClientRect(), g = document.querySelector('.lib-card .go').getBoundingClientRect(); return { tabs: [...document.querySelectorAll('.modal-card.lib [data-lk]')].every(b => b.scrollWidth <= b.clientWidth + 1) && document.querySelector('.modal-card.lib').scrollWidth <= document.querySelector('.modal-card.lib').clientWidth + 1, w: c.width, bottom: c.bottom, inW: k.right <= 390 && k.left >= 0, go: g.height >= 24, over: document.documentElement.scrollWidth <= 390 }; });
   chk('Am Handy passen die Markenunterlagen ins Fenster; Karte und Reiter sind ganz zu sehen', hy.tabs && hy.w <= 390 && hy.bottom <= 781 && hy.inW && hy.go && hy.over, hy);
   chk('Auch am Handy ist die Auflage beim neuen Hochformat dabei', (await top()).last);
 } catch (e) { chk('Der Lauf endet ohne Abbruch', false, String(e && e.stack || e)); }

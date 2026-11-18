@@ -14,7 +14,7 @@ try {
   chk('Leere Übersicht mit Hinweis', await ev(() => !document.querySelector('#homeEmpty').classList.contains('hidden')));
   await page.click('#emptyNew'); await page.waitForSelector('#ndGrid canvas');
   const nd = await ev(() => ({ n: document.querySelectorAll('#ndGrid button').length, fm: document.querySelectorAll('#ndFmt button').length, tall: (() => { document.querySelector('#ndFmt [data-f="9:16"]').click(); const c = document.querySelector('#ndGrid canvas'); return c.height > c.width; })() }));
-  chk('Zehn Vorlagen, vier Formate; die Vorschauen folgen dem Format', nd.n === 10 && nd.fm === 4 && nd.tall, nd);
+  chk('Dreizehn Vorlagen, vier Formate; die Vorschauen folgen dem Format', nd.n === 13 && nd.fm === 4 && nd.tall, nd);
   await page.click('#ndFmt [data-f="16:9"]'); await page.click('#ndGrid [data-t="rechts"]'); await page.waitForFunction(() => HT.doc && !document.querySelector('#ed').classList.contains('hidden'));
   const d0 = await ev(() => ({ n: HT.doc.layers.length, bg: HT.doc.layers[0].type, slots: HT.doc.layers.map(l => l.slot || '').join(), box: [document.querySelector('#stageBox').clientWidth, document.querySelector('#stageBox').clientHeight] }));
   chk('Vorlage „Person rechts“ ist offen: Hintergrund, Person, Rubrik, Titel, Strich', d0.n === 5 && d0.bg === 'bg' && d0.slots === 'photo,person,kicker,title,'.replace('photo', '') && Math.abs(d0.box[0] / d0.box[1] - 16 / 9) < 0.02, d0);
@@ -114,7 +114,7 @@ try {
 
   // ═════════ Vorlage, Farbe, Format ═════════
   await page.click('#leftTabs [data-t="tpl"]'); await sleep(700);
-  chk('Die Vorlagen zeigen den eigenen Inhalt; die aktuelle ist markiert', await ev(() => document.querySelectorAll('#tplGrid canvas').length === 10 && document.querySelector('#tplGrid .on')?.dataset.t === 'rechts'));
+  chk('Die Vorlagen zeigen den eigenen Inhalt; die aktuelle ist markiert', await ev(() => document.querySelectorAll('#tplGrid canvas').length === 13 && document.querySelector('#tplGrid .on')?.dataset.t === 'rechts'));
   await page.click('#tplGrid [data-t="balken"]'); await sleep(400);
   const v1 = await ev(() => { const d = HT.doc, b = d.layers[0]; return { tpl: d.tpl, bgImg: b.fill.img, auto: b.auto, src: d.keep.person.src, title: d.layers.find(x => x.slot === 'title').text, extra: d.layers.filter(x => x.user).map(x => x.type).join() }; });
   chk('„Bild mit Balken“ nimmt das unbeschnittene Foto als Hintergrund; Titel und eigene Ebenen bleiben', v1.tpl === 'balken' && v1.bgImg === v1.src && v1.auto === true && v1.title === 'Wer hat das *gesagt*?' && v1.extra === 'text,icon,shape', v1);
@@ -181,7 +181,7 @@ try {
   chk('Schmales Fenster: Bild oben, darunter „Bearbeiten“, unten drei Reiter; nichts ragt über den Rand', a.tabs && a.insp && !a.left && a.stageTop && a.wide && a.exp && !a.fmt && a.more, a);
   await m.click('#mobTabs [data-t="tpl"]'); await sleep(700);
   const b = await m.evaluate(() => { const r = s => document.querySelector(s).getBoundingClientRect(); return { n: document.querySelectorAll('#tplGrid canvas').length, below: r('#paneL').top >= r('#paneStage').bottom - 1, insp: document.querySelector('#paneInsp').offsetParent !== null }; });
-  chk('Reiter „Vorlagen“ zeigt die Vorlagen unter dem Bild', b.n === 10 && b.below && !b.insp, b);
+  chk('Reiter „Vorlagen“ zeigt die Vorlagen unter dem Bild', b.n === 13 && b.below && !b.insp, b);
   await m.click('#mobTabs [data-t="layers"]'); await sleep(200); await m.click('#layerList .lay .n'); await sleep(200);
   chk('Antippen einer Ebene wählt sie und wechselt zu „Bearbeiten“', await m.evaluate(() => !!HT.sel && document.querySelector('#paneInsp').offsetParent !== null && document.querySelector('#mobTabs .on').dataset.t === 'insp'));
   await m.click('#edMore'); await m.click('#modalCard [data-f="1:1"]'); await sleep(400);

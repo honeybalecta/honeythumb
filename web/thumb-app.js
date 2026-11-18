@@ -47,7 +47,7 @@
   const snap = () => JSON.stringify({layers: doc.layers, format: doc.format, tpl: doc.tpl, accent: doc.accent, accentKey: doc.accentKey, keep: doc.keep || {}});
   // Stand festhalten (für Rückgängig) und speichern; ohne Änderung an den Ebenen entsteht kein neuer Schritt
   const pool = {};   // alle Bilder dieser Sitzung – damit Rückgängig auch Ebenen zurückholt, deren Bild inzwischen aufgeräumt wurde
-  function commit(){ H.pinTop(doc); Object.assign(pool, doc.assets); doc.updated = Date.now(); const s = snap(); if (s !== hist[hi]){ hist = hist.slice(0, hi + 1); hist.push(s); if (hist.length > 80) hist.shift(); hi = hist.length - 1; } after(); }
+  function commit(){ H.pinTop(doc); H.packFonts(doc); Object.assign(pool, doc.assets); doc.updated = Date.now(); const s = snap(); if (s !== hist[hi]){ hist = hist.slice(0, hi + 1); hist.push(s); if (hist.length > 80) hist.shift(); hi = hist.length - 1; } after(); }
   function after(){ $('#undoBtn').disabled = hi <= 0; $('#redoBtn').disabled = hi >= hist.length - 1; $('#saved').textContent = '…'; clearTimeout(saveT); saveT = setTimeout(saveNow, 700); draw(); layerList(); clearTimeout(tplT); tplT = setTimeout(tplGrid, 500); }
   function travel(d){ if (hi + d < 0 || hi + d >= hist.length) return; hi += d; Object.assign(doc, JSON.parse(hist[hi])); doc.assets = {...pool, ...doc.assets}; if (!cur()) selId = null; fillBar(); fitStage(); after(); inspector(); }
   async function saveNow(){
@@ -90,6 +90,7 @@
     {k: 'overlay', n: 'Auflagen', one: 'Auflage', hint: 'Bilder, die immer ganz oben liegen, etwa ein Banner am unteren Rand. Durchsichtige Stellen lassen das Titelbild durch; die Vorlagen ordnen alles in der freien Fläche an.'},
     {k: 'graphic', n: 'Grafiken', one: 'Grafik', hint: 'Logos, Wasserzeichen, Knöpfe und andere Bilder, die du immer wieder brauchst.'},
     {k: 'bg', n: 'Hintergründe', one: 'Hintergrund', hint: 'Bilder, die du immer wieder als Hintergrund nimmst. Ein Tipp setzt sie hinter alles andere.'},
+    {k: 'font', n: 'Schriften', one: 'Schrift', hint: 'Eigene Schriftdateien (TTF, OTF, WOFF) – etwa die Schriften deines Kanals. Sie stehen bei jedem Text zur Wahl. „Titel“ und „Klein“ legen fest, welche Schrift die Pinselbalken-Vorlagen nehmen.'},
   ];
   let lib = [], libP = null, brands = [], brandId = null;
   const brand = () => brands.find(b => b.id === brandId) || brands[0];
@@ -106,7 +107,18 @@
     if (!brands.length) await brandSave({id: H.uid(), name: 'Meine Marke', accentKey: 'rot'});   // auch für Einträge aus 1.1.0, die noch keine Marke tragen
     if (!brands.some(b => b.id === brandId)) brandId = brands[0].id;
     for (const it of lib) if (!brands.some(b => b.id === it.brand)){ it.brand = brandId; await Store.set('lib:' + it.id, it); }
+    for (const it of lib) if (it.kind === 'font') await H.addFont('u:' + it.id, it.name, it.url).catch(() => null);
     libSort(); await Promise.all(lib.filter(i => i.kind === 'overlay').map(i => H.decode(i.img).catch(() => null))); })().catch(() => null); }
+  // Schriftdatei wählen und in die Markenunterlagen aufnehmen
+  let fontRes = null;
+  function pickFont(){ return new Promise(res => { fontRes = res; const i = $('#fontIn'); i.value = ''; i.click(); }); }
+  $('#fontIn').addEventListener('change', e => { const f = e.target.files[0], res = fontRes; fontRes = null; if (res) res(f || null); });
+  async function libAddFont(file){
+    const ext = (file.name.split('.').pop() || '').toLowerCase(); if (!['ttf', 'otf', 'woff', 'woff2'].includes(ext)) throw new Error('HoneyThumb liest Schriften als TTF, OTF oder WOFF.'); if (file.size > 4e6) throw new Error('Die Schriftdatei ist größer als 4 MB.');
+    const id = H.uid(), url = `data:font/${ext};base64,` + await blobB64(file), name = file.name.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').slice(0, 60);
+    await H.addFont('u:' + id, name, url); return libSave({id, kind: 'font', name, url});
+  }
+  const fontsOf = () => { const f = brand().fonts || {}, ok = k => k && mine('font').some(i => 'u:' + i.id === k) ? k : null; return {title: ok(f.title), small: ok(f.small)}; };
   async function libSave(it){ it.updated = Date.now(); it.brand ||= brandId; const i = lib.findIndex(x => x.id === it.id); if (i < 0) lib.push(it); else lib[i] = it; libSort(); await Store.set('lib:' + it.id, it); return it; }
   async function libDel(id){ lib = lib.filter(x => x.id !== id); await Store.del('lib:' + id); }
   // Kleines Vorschaubild (freigestellt, mit Transparenz)
@@ -171,6 +183,8 @@
           <div class="tabs">${KINDS.map(x => `<button data-lk="${x.k}" class="${x.k === kind ? 'on' : ''}">${esc(x.n)}</button>`).join('')}</div><p class="hint">${esc(K().hint)}</p><div class="lib-grid">`;
         for (const it of mine(kind)){
           if (kind === 'person') h += card(`data-li="${it.id}" tabindex="0"`, it.pics[0] && it.pics[0].thumb, `<b>${esc(it.name)}</b><span class="muted small">${it.pics.length === 1 ? '1 Bild' : it.pics.length + ' Bilder'}</span>`, `<button data-lb="edit" title="Bilder und Name bearbeiten" aria-label="Bearbeiten">✎</button>`);
+          else if (kind === 'font'){ const k = 'u:' + it.id, fo = fontsOf(), ff = (H.FONTS.find(x => x.k === k) || {}).f;
+            h += `<div class="lib-card" data-li="${it.id}"><div class="pic font" style="font-family:'${ff || 'Inter'}'">${ff ? 'Abc 123' : 'nicht lesbar'}</div><b>${esc(it.name)}</b><div class="seg fm" title="Schrift der Pinselbalken-Vorlagen"><button data-lrole="title" class="${fo.title === k ? 'on' : ''}">Titel</button><button data-lrole="small" class="${fo.small === k ? 'on' : ''}">Klein</button></div><div class="acts">${moveBtn()}<button data-lb="delitem" title="Löschen" aria-label="Löschen">🗑</button></div></div>`; }
           else h += card(`data-li="${it.id}"${can && tap(kind) ? ' tabindex="0" title="Ins Titelbild einsetzen"' : ''}`, it.thumb, `<input class="nm" data-ln="${it.id}" value="${esc(it.name)}" maxlength="60" aria-label="Name" spellcheck="false">` +
             (kind === 'overlay' ? `<div class="seg fm" title="Formate, für die diese Auflage gilt">${H.FORMATS.map(f => `<button data-lf="${f.k}" class="${(it.formats || []).includes(f.k) ? 'on' : ''}">${f.k}</button>`).join('')}</div><label class="chk small"><input type="checkbox" data-lauto${it.auto ? ' checked' : ''}> Immer dabei</label>` : '') +
             (can ? `<span class="go" data-lb="use">Einsetzen</span>` : ''), moveBtn() + `<button data-lb="delitem" title="Löschen" aria-label="Löschen">🗑</button>`); }
@@ -192,9 +206,11 @@
         else if (a === 'bnew'){ const n = await brandSave({id: H.uid(), name: 'Neue Marke', accentKey: 'rot'}); await brandUse(n.id); view = 'brand'; open = null; paint(); const i = $('#lbBName'); i.focus(); i.select(); }
         else if (a === 'bdel'){ const B = brand(); if (brands.length > 1 && confirm(`Die Marke „${B.name}“ mit allen ${mine().length} Einträgen löschen? Titelbilder, die sie schon tragen, behalten ihre Bilder.`)){ await brandDel(B.id); view = ''; paint(); } }
         else if (t.closest('[data-lacc]')){ const B = brand(); B.accentKey = t.closest('[data-lacc]').dataset.lacc; await brandSave(B); await brandUse(B.id); paint(); }
+        else if (t.closest('[data-lrole]')){ const B = brand(), r = t.closest('[data-lrole]').dataset.lrole, k = 'u:' + it.id; B.fonts = {...fontsOf()}; B.fonts[r] = B.fonts[r] === k ? null : k; await brandSave(B); paint(); }
         else if (a === 'move'){ mv = it.id; view = 'move'; paint(); }
         else if (t.closest('[data-lmv]')){ const m = item(mv), to = brands.find(x => x.id === t.closest('[data-lmv]').dataset.lmv); m.brand = to.id; await libSave(m); view = ''; open = null; paint(); toast(`„${m.name}“ liegt jetzt bei „${to.name}“.`); }
         else if (a === 'add'){ if (kind === 'person'){ const n = await libSave({id: H.uid(), kind, name: 'Neue Person', pics: []}); open = n.id; paint(); const i = $('#lbName'); i.focus(); i.select(); }
+          else if (kind === 'font'){ const f = await pickFont(); if (!f) return; busy('Lade Schrift …'); await libAddFont(f); busy(''); paint(); if (doc) inspector(); }
           else { const url = await pickImage(); if (!url) return; await libAddImage(kind, url); paint(); if (kind === 'overlay') toast('Hinterlegt. Die Auflage ist bei neuen Titelbildern im passenden Format immer dabei.'); } }
         else if (a === 'addpic'){ const url = await pickImage(); if (!url) return; await libAddImage('person', url, {id: open}); paint(); }
         else if (a === 'delpic'){ const p = item(open), q = cd.dataset.lp; if (confirm('Dieses Bild aus den Markenunterlagen löschen?')){ p.pics = p.pics.filter(x => x.id !== q); await libSave(p); paint(); } }
@@ -230,12 +246,13 @@
   }
   // Markenunterlagen als Datei: eine Marke im Ganzen sichern und einlesen (Marke und Einträge mit derselben Kennung werden ersetzt).
   // Gelesen werden auch Dateien aus 1.1.0 (ohne Marke): ihre Einträge kommen in die gewählte Marke.
-  async function brandFile(){ const B = brand(); await saveBlob(new Blob([JSON.stringify({app: 'honeythumb-marke', v: 1, brand: {id: B.id, name: B.name, accentKey: B.accentKey}, items: mine()})], {type: 'application/json'}), `Markenunterlagen-${safeName(B.name)}.json`); }
+  async function brandFile(){ const B = brand(); await saveBlob(new Blob([JSON.stringify({app: 'honeythumb-marke', v: 1, brand: {id: B.id, name: B.name, accentKey: B.accentKey, fonts: fontsOf()}, items: mine()})], {type: 'application/json'}), `Markenunterlagen-${safeName(B.name)}.json`); }
   async function libImport(raw){
     await libReady(); const ID = /^[\w-]{1,40}$/, ok = u => typeof u === 'string' && DATA.test(u), opt = u => u == null || ok(u), str = (v, d) => String(v || d).slice(0, 60), ONE = {overlay: 'Auflage', graphic: 'Grafik', bg: 'Hintergrund'}; let n = 0, B = null;
-    if (raw.app === 'honeythumb-marke' && raw.brand && typeof raw.brand.id === 'string' && ID.test(raw.brand.id)){ B = await brandSave({id: raw.brand.id, name: str(raw.brand.name, 'Marke'), accentKey: H.accent(raw.brand.accentKey).k}); await brandUse(B.id); }
+    if (raw.app === 'honeythumb-marke' && raw.brand && typeof raw.brand.id === 'string' && ID.test(raw.brand.id)){ const rf = raw.brand.fonts || {}, fk = v => typeof v === 'string' && /^u:[\w-]{1,40}$/.test(v) ? v : null; B = await brandSave({id: raw.brand.id, name: str(raw.brand.name, 'Marke'), accentKey: H.accent(raw.brand.accentKey).k, fonts: {title: fk(rf.title), small: fk(rf.small)}}); await brandUse(B.id); }
     for (const r of Array.isArray(raw.items) ? raw.items.slice(0, 500) : []){ if (!r || typeof r.id !== 'string' || !ID.test(r.id)) continue; let it = null;
       if (r.kind === 'person' && Array.isArray(r.pics)) it = {id: r.id, kind: 'person', name: str(r.name, 'Person'), pics: r.pics.filter(q => q && ok(q.img) && opt(q.mask) && opt(q.src) && opt(q.thumb)).slice(0, 60).map(q => ({id: ID.test(q.id || '') ? q.id : H.uid(), img: q.img, mask: q.mask || null, src: q.src || null, thumb: q.thumb || q.img}))};
+      else if (r.kind === 'font' && typeof r.url === 'string' && H.FONT_URL.test(r.url)){ if (!await H.addFont('u:' + r.id, str(r.name, 'Schrift'), r.url).catch(() => null)) continue; it = {id: r.id, kind: 'font', name: str(r.name, 'Schrift'), url: r.url}; }
       else if (ONE[r.kind] && ok(r.img)){ const im = await H.decode(r.img).catch(() => null); if (!im) continue; it = {id: r.id, kind: r.kind, name: str(r.name, ONE[r.kind]), img: r.img, ar: im.naturalWidth / im.naturalHeight, thumb: ok(r.thumb) ? r.thumb : await thumbOf(r.img)};
         if (r.kind === 'overlay'){ it.band = H.bandOf(im); it.formats = (Array.isArray(r.formats) ? r.formats : []).filter(f => H.FORMATS.some(x => x.k === f)); it.auto = !!r.auto; } }
       if (it){ it.brand = brandId; await libSave(it); n++; } }
@@ -252,10 +269,10 @@
       <div class="modal-foot"><button class="btn ghost" id="ndCancel">Abbrechen</button><button class="btn" id="ndBlank">Leer beginnen</button></div>`);
     const paint = () => { $$('#ndFmt button').forEach(b => b.classList.toggle('on', b.dataset.f === fmt));
       const g = $('#ndGrid'); g.innerHTML = '';
-      for (const t of H.TEMPLATES){ const b = document.createElement('button'); b.dataset.t = t.id; const d = H.fromTemplate(t.id, fmt, {}, {...autoTops(fmt), accentKey: brand().accentKey}); b.append(H.render(d, 340, {edit: true})); const s = document.createElement('span'); s.textContent = t.n; b.append(s); g.append(b); } };
-    const start = async tpl => { closeModal(); const ax = {...autoTops(fmt), accentKey: brand().accentKey}; let d = tpl ? H.fromTemplate(tpl, fmt, {}, ax) : H.blank(fmt);
+      for (const t of H.TEMPLATES){ const b = document.createElement('button'); b.dataset.t = t.id; const d = H.fromTemplate(t.id, fmt, {}, {...autoTops(fmt), accentKey: brand().accentKey, fonts: fontsOf()}); b.append(H.render(d, 340, {edit: true})); const s = document.createElement('span'); s.textContent = t.n; b.append(s); g.append(b); } };
+    const start = async tpl => { closeModal(); const ax = {...autoTops(fmt), accentKey: brand().accentKey, fonts: fontsOf()}; let d = tpl ? H.fromTemplate(tpl, fmt, {}, ax) : H.blank(fmt);
       if (!tpl){ Object.assign(d.assets, ax.assets); d.layers.push(...ax.extra); d.accentKey = H.accent(ax.accentKey).k; d.accent = H.accent(ax.accentKey).dark; }
-      if (pre && pre.url){ const id = H.addAsset(d, pre.url); if (tpl) d = H.fromTemplate(tpl, fmt, {person: {img: id, mask: null}}, {id: d.id, assets: d.assets, extra: ax.extra, accentKey: ax.accentKey}); else { await H.load(d); const im = H.imgOf(d, id); d.layers.push(H.newLayer(d, 'img', {img: id, ratio: im.naturalWidth / im.naturalHeight})); } }
+      if (pre && pre.url){ const id = H.addAsset(d, pre.url); if (tpl) d = H.fromTemplate(tpl, fmt, {person: {img: id, mask: null}}, {id: d.id, assets: d.assets, extra: ax.extra, accentKey: ax.accentKey, fonts: ax.fonts}); else { await H.load(d); const im = H.imgOf(d, id); d.layers.push(H.newLayer(d, 'img', {img: id, ratio: im.naturalWidth / im.naturalHeight})); } }
       await openDoc(d, true); if (ax.extra.length) toast(`Auflage „${ax.extra.map(L => L.name).join('“, „')}“ ist dabei – sie liegt immer ganz oben.`);
       const p = doc.layers.find(L => L.type === 'img' && L.slot === 'person' && L.img && !L.mask); if (p){ select(p.id); await cutLayer(p, true); } };
     H.fonts().then(libReady).then(paint);
@@ -418,7 +435,8 @@
         h += fRange(L, 'size', 'Größe', 16, Math.round(u * 1.3), 1, 80) + fColor(L, 'color', 'Farbe', {def: PAL.cream}) + fColor(L, 'accent', 'Farbe der Hervorhebung', {none: 'Akzentfarbe des Titelbilds'});
         h += `<div class="row wrap">${fSeg(L, 'align', '', [['l', 'Links'], ['c', 'Mitte'], ['r', 'Rechts']], 'l')}${fSeg(L, 'valign', '', [['t', 'Oben'], ['m', 'Mitte'], ['b', 'Unten']], 'm')}</div>`;
         h += `<div class="row wrap">${fChk(L, 'upper', 'Großbuchstaben')}${fChk(L, 'fit', 'Verkleinern, bis er passt', true)}</div>` + fRange(L, 'lh', 'Zeilenabstand', 0.8, 1.8, 0.01, 1.05);
-        h += grp('Balken hinter dem Text', fTog(L, 'box', 'Balken', {c: H.accent(doc.accentKey).light, pad: 0.2}) + (L.box ? fColor(L, 'box.c', 'Farbe') + fSeg(L, 'box.mode', '', [['line', 'Je Zeile'], ['block', 'Ein Block']], 'line') + fRange(L, 'box.pad', 'Rand', 0, 0.6, 0.01, 0.2) : ''));
+        h += grp('Balken hinter dem Text', fTog(L, 'box', 'Balken', {c: H.accent(doc.accentKey).light, pad: 0.2}) + (L.box ? fColor(L, 'box.c', 'Farbe') + fSeg(L, 'box.style', '', [['rect', 'Glatt'], ['brush', 'Pinselstrich'], ['torn', 'Papier']], 'rect') + fSeg(L, 'box.mode', '', [['line', 'Je Zeile'], ['block', 'Ein Block']], 'line') + fRange(L, 'box.pad', 'Rand', 0, 0.6, 0.01, 0.2) : ''));
+        h += grp('Raue Schrift', fRange(L, 'rough', 'Stärke', 0, 1, 0.05, 0) + (L.rough > 0 || (L.box && L.box.style && L.box.style !== 'rect') ? `<div class="row wrap">${btn('seed', 'Anderes Muster')}</div>` : ''));
         h += grp('Kontur und Schatten', fTog(L, 'stroke', 'Kontur', {w: 6, c: PAL.ink}) + (L.stroke ? fRange(L, 'stroke.w', 'Stärke', 1, 30, 0.5, 6) + fColor(L, 'stroke.c', 'Farbe') : '') + fTog(L, 'shadow', 'Schatten', {b: 18, x: 0, y: 8, c: 'rgba(0,0,0,0.5)'}));
       }
       if (L.type === 'img' && L.top){
@@ -468,6 +486,7 @@
     else if (a === 'libgraphic') libDialog({kind: 'graphic', pick: async it => { await setImage(L, it.img); commit(); select(L.id); }});
     else if (a === 'lib-overlay') libDialog({kind: 'overlay'});
     else if (a === 'libbg') libDialog({kind: 'bg'});
+    else if (a === 'seed'){ L.seed = 1 + Math.floor(Math.random() * 2e9); commit(); }
     else if (a === 'tolib') toLibDialog(L);
     else if (a === 'dup'){ const c = H.clone(L); c.id = H.uid(); delete c.slot; c.user = true; c.x += 30; c.y += 30; doc.layers.splice(i + 1, 0, c); commit(); select(c.id); }
     else if (a === 'lock'){ L.lock = !L.lock; commit(); inspector(); }
@@ -501,7 +520,7 @@
   function tplGrid(){
     if (!doc || $('#tplGrid').offsetParent === null) return; const g = $('#tplGrid'), cont = H.contentOf(doc); g.innerHTML = '';
     for (const t of H.TEMPLATES){ const b = document.createElement('button'); b.dataset.t = t.id; b.className = t.id === doc.tpl ? 'on' : ''; b.title = t.n;
-      const d = H.fromTemplate(t.id, doc.format, cont, {accentKey: doc.accentKey, assets: doc.assets, extra: doc.layers.filter(L => L.top)}); b.append(H.render(d, 240, {edit: true})); const s = document.createElement('span'); s.textContent = t.n; b.append(s); g.append(b); }
+      const d = H.fromTemplate(t.id, doc.format, cont, {accentKey: doc.accentKey, assets: doc.assets, extra: doc.layers.filter(L => L.top), fonts: doc.tfonts}); b.append(H.render(d, 240, {edit: true})); const s = document.createElement('span'); s.textContent = t.n; b.append(s); g.append(b); }
   }
   $('#tplGrid').addEventListener('click', e => { const b = e.target.closest('[data-t]'); if (!b) return; doc = H.retemplate(doc, b.dataset.t); selId = null; commit(); inspector(); tplGrid(); toast('Vorlage „' + H.template(b.dataset.t).n + '“ – Texte und Bilder sind übernommen.'); });
   const GLYPH = {bg: '▦', text: 'T', img: '▣', shape: '◆', icon: '★'};
@@ -572,7 +591,7 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden && doc) saveNow(); });
 
   // Für Prüfläufe und Fehlersuche
-  window.HT = {get lib(){ return lib; }, libDialog, libSave, libAddImage, usePerson, useOverlay, useGraphic, libImport, brandFile, brandSave, brandUse, get brand(){ return brand(); }, get brands(){ return brands; }, mine, useBg, setFormat,
+  window.HT = {get lib(){ return lib; }, libDialog, libSave, libAddImage, usePerson, useOverlay, useGraphic, libImport, libAddFont, brandFile, brandSave, brandUse, get brand(){ return brand(); }, get brands(){ return brands; }, mine, useBg, setFormat,
     get doc(){ return doc; }, get sel(){ return selId; }, select, commit, openDoc, showHome, newDialog, saveNow, Store, act, cutLayer, importFile, get scale(){ return sc; }};
 
   // ───────── Start ─────────

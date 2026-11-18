@@ -13,12 +13,13 @@ HoneyThumb läuft eigenständig (Windows, Android, Browser). Seine Vorlagen sind
 
 ## Was es kann
 
-- **Zehn Vorlagen:** Person rechts, Person links (hell), Bild mit Balken, Kreis, Strahlen, Zitat, Schlagzeile, Frage, Ausschnitt, Geteilt. Jede Vorlage gibt es für alle Formate. Beim Wechsel der Vorlage bleiben Texte, Bilder und eigene Ebenen erhalten; die Vorschauen zeigen gleich den eigenen Inhalt.
+- **Dreizehn Vorlagen:** Pinselbalken unten, Pinselbalken Mitte, Pinselbalken mit Person, Person rechts, Person links (hell), Bild mit Balken, Kreis, Strahlen, Zitat, Schlagzeile, Frage, Ausschnitt, Geteilt. Jede Vorlage gibt es für alle Formate. Beim Wechsel der Vorlage bleiben Texte, Bilder und eigene Ebenen erhalten; die Vorschauen zeigen gleich den eigenen Inhalt.
+- **Pinselbalken:** Bild über die ganze Fläche, darauf drei leicht gedrehte Balken – Titel auf einem Pinselstrich in der Akzentfarbe, ein kleines Wort in Schreibmaschinenschrift auf einem Papierfetzen, die zweite Zeile auf Schwarz. Farbe, Balkenart (glatt, Pinselstrich, Papier), „Raue Schrift“ und „Anderes Muster“ stehen bei den Eigenschaften jedes Texts.
 - **Formate:** Quer 16:9 (YouTube), Hoch 9:16 (Reels, TikTok, Shorts), Quadrat 1:1, Hoch 4:5.
 - **Person freistellen:** Bild wählen, HoneyThumb erkennt die Person und blendet den Rest aus. Die Erkennung wird beim ersten Mal aus dem Netz geladen (ca. 10 MB), das Bild bleibt auf dem Gerät. Mit „Maske nachbessern“ lässt sich mit dem Pinsel etwas entfernen oder zurückholen; „Freistellung aufheben“ zeigt wieder das ganze Bild.
 - **Umriss und Schatten** um die freigestellte Person, Schwarz-weiß, Spiegeln, Ausschnitt.
 - **Hintergrund:** Farbe, Verlauf, Bild (weichzeichnen, abdunkeln, schwarz-weiß), Strahlen, Punkte, Schräg geteilt, Raster; dazu abgedunkelte Ränder.
-- **Text:** zehn Schriften, `*Sternchen*` färben ein Wort in der Akzentfarbe, Balken hinter dem Text (je Zeile oder als Block), Kontur, Schatten. Ein Text wird verkleinert, bis er in sein Feld passt; wird er dabei sehr klein, erscheint ein Hinweis.
+- **Text:** elf Schriften (dazu eigene), `*Sternchen*` färben ein Wort in der Akzentfarbe, Balken hinter dem Text (je Zeile oder als Block), Kontur, Schatten. Ein Text wird verkleinert, bis er in sein Feld passt; wird er dabei sehr klein, erscheint ein Hinweis.
 - **Formen und Piktogramme:** Rechteck, Kreis, Dreieck, Stern, Zacken, Pfeil, Sprechblase, Ring, Linie; rund 500 Piktogramme (dieselben wie in HoneyDeck) mit Suche.
 - **Bühne:** Ebenen anfassen, verschieben (rastet an Mitte, Rändern und Schutzrand ein), an den Ecken im Verhältnis vergrößern, an den Seiten die Breite ändern, drehen. Pfeiltasten schieben fein, Strg+D dupliziert, Entf löscht, Strg+Z macht rückgängig.
 - **Ebenen:** Liste von vorn nach hinten, ausblenden, sperren, nach vorn und nach hinten.
@@ -29,6 +30,7 @@ HoneyThumb läuft eigenständig (Windows, Android, Browser). Seine Vorlagen sind
   - **Auflagen:** Bilder, die immer ganz oben liegen (etwa ein Banner am unteren Rand), je Format wählbar. Mit „Immer dabei“ bekommt jedes neue Titelbild in diesen Formaten die Auflage von selbst. Die Vorlagen ordnen Texte und Bilder in der freien Fläche an, damit nichts unter der Auflage verschwindet.
   - **Grafiken:** Logos, Wasserzeichen und andere wiederkehrende Bilder.
   - **Hintergründe:** Bilder, die immer wieder als Hintergrund dienen.
+  - **Schriften:** eigene Schriftdateien (TTF, OTF, WOFF). Sie stehen bei jedem Text zur Wahl; „Titel“ und „Klein“ legen fest, welche Schrift die Pinselbalken-Vorlagen nehmen. Eine genutzte eigene Schrift steckt in der Datei `.honeythumb`.
   - Person, Bild oder Hintergrund eines Titelbilds lassen sich mit „Hinterlegen“ direkt in die gewählte Marke aufnehmen; Einträge lassen sich in eine andere Marke legen.
   - **Auf ein anderes Gerät:** „Sichern“ schreibt die Marke im Ganzen in eine Datei (`Markenunterlagen-Name.json`: Name, Farbe, alle Einträge). „Laden“ oder „Öffnen“ liest sie ein; die Marke ist danach gewählt, schon vorhandene Einträge werden ersetzt. Die Unterlagen liegen je Gerät getrennt.
 - **Bilder holen:** Datei wählen, aus der Zwischenablage einfügen oder ins Fenster ziehen. Ein geöffnetes Foto wird in der gewählten Vorlage gleich freigestellt.
@@ -60,7 +62,7 @@ JSON, UTF-8. Maße in Entwurfspixeln des Formats (16:9 = 1600 × 900, 9:16 = 900
 | alle außer `bg` | `x`, `y`, `w`, `h`, `rot` (Grad), `op` (Deckkraft 0…1), `hide`, `lock`, `slot` (Feld einer Vorlage: `person`, `photo`, `title`, `kicker`, `sub`) |
 | `bg` | `fill.kind`: `color`, `grad`, `img`, `rays`, `dots`, `diag`, `grid`; Farben `a`, `b`; bei `img`: `img`, `blur`, `dim`, `gray`, `zoom`, `pos`; `vig` dunkelt die Ränder ab |
 | `img` | `img` (Bild), `mask` (PNG, dessen Deckkraft die Maske ist), `src` (unbeschnittenes Original), `fit` (`cover`/`contain`), `zoom`, `pos`, `flip`, `gray`, `outline {w, c}`, `shadow {b, x, y, c}`, `round`, `frame {w, c}` |
-| `text` | `text`, `font`, `size`, `color`, `accent`, `align` (`l`/`c`/`r`), `valign` (`t`/`m`/`b`), `lh`, `upper`, `fit`, `box {c, pad, mode}`, `stroke {w, c}`, `shadow` |
+| `text` | `text`, `font` (auch `u:ID` für eine eigene Schrift aus `fonts`), `size`, `color`, `accent`, `align` (`l`/`c`/`r`), `valign` (`t`/`m`/`b`), `lh`, `upper`, `fit`, `box {c, pad, mode, style}` (`style`: `rect`, `brush`, `torn`), `rough` (0…1), `seed` (Muster), `stroke {w, c}`, `shadow` |
 | `shape` | `shape`: `rect`, `ellipse`, `tri`, `star`, `burst`, `arrow`, `bubble`, `ring`, `line`; `fill`, `stroke {w, c}`, `round` |
 | `icon` | `icon` (Name des Piktogramms), `color`, `accent` |
 | Auflage (`img` mit `top: true`) | liegt immer zuletzt in `layers`; `lock`, `name`, `lib` (Eintrag der Ablage), `fmts` (Formate), `ar` (Seitenverhältnis des Bildes), `band {t, b}` (deckende Streifen oben und unten als Anteil der Bildhöhe) |
