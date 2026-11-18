@@ -81,21 +81,33 @@
   $('#modal').addEventListener('pointerdown', e => { if (e.target.id === 'modal') closeModal(); });
 
 
-  // ───────── Ablage: fest hinterlegte Bilder für alle Titelbilder ─────────
-  // Personen (ein oder mehrere freigestellte Bilder), Auflagen (liegen immer ganz oben, je Format; auf Wunsch bei jedem neuen Titelbild dabei), Grafiken (Logos, Wasserzeichen).
-  // Jeder Eintrag liegt unter „lib:ID“ in der Ablage des Geräts; „Ablage sichern“ schreibt alle in eine Datei für ein anderes Gerät.
+  // ───────── Markenunterlagen: fest hinterlegte Bilder und die Akzentfarbe einer Marke ─────────
+  // Eine Marke (z. B. der eigene Kanal oder eine Abgeordnete) trägt Personen (ein oder mehrere freigestellte Bilder), Auflagen (liegen immer ganz oben, je Format;
+  // auf Wunsch bei jedem neuen Titelbild dabei), Grafiken (Logos, Wasserzeichen) und Hintergründe. Es gilt immer die gewählte Marke.
+  // Speicher des Geräts: „brand:ID“ je Marke, „lib:ID“ je Eintrag (mit brand), „set:brand“ die gewählte Marke. „Sichern“ schreibt eine Marke im Ganzen in eine Datei für ein anderes Gerät.
   const KINDS = [
     {k: 'person', n: 'Personen', one: 'Person', hint: 'Menschen, die regelmäßig auf deinen Titelbildern stehen. Je Person ein oder mehrere Bilder – ein Tipp setzt sie ins Titelbild.'},
     {k: 'overlay', n: 'Auflagen', one: 'Auflage', hint: 'Bilder, die immer ganz oben liegen, etwa ein Banner am unteren Rand. Durchsichtige Stellen lassen das Titelbild durch; die Vorlagen ordnen alles in der freien Fläche an.'},
     {k: 'graphic', n: 'Grafiken', one: 'Grafik', hint: 'Logos, Wasserzeichen, Knöpfe und andere Bilder, die du immer wieder brauchst.'},
+    {k: 'bg', n: 'Hintergründe', one: 'Hintergrund', hint: 'Bilder, die du immer wieder als Hintergrund nimmst. Ein Tipp setzt sie hinter alles andere.'},
   ];
-  let lib = [], libP = null;
+  let lib = [], libP = null, brands = [], brandId = null;
+  const brand = () => brands.find(b => b.id === brandId) || brands[0];
+  const mine = k => lib.filter(i => i.brand === brandId && (!k || i.kind === k));
+  async function brandSave(b){ const i = brands.findIndex(x => x.id === b.id); if (i < 0) brands.push(b); else brands[i] = b; brands.sort((a, c) => String(a.name).localeCompare(String(c.name), 'de')); await Store.set('brand:' + b.id, b); return b; }
+  async function brandUse(id){ brandId = id; await Store.set('set:brand', id); if (!doc) document.documentElement.style.setProperty('--acc', H.accent(brand().accentKey).dark); }
+  async function brandDel(id){ for (const it of lib.filter(i => i.brand === id)) await libDel(it.id); brands = brands.filter(b => b.id !== id); await Store.del('brand:' + id); await brandUse(brands[0].id); }
   const DATA = /^data:image\/(png|jpeg|webp|gif);base64,/;
   const libSort = () => lib.sort((a, b) => String(a.name).localeCompare(String(b.name), 'de'));
   // Beim Start: Einträge lesen und die Auflagen dekodieren (für die Vorschauen neuer Titelbilder)
   function libReady(){ return libP ||= (async () => { for (const k of await Store.keys('lib:')){ try { const it = await Store.get(k); if (it && it.id && KINDS.some(x => x.k === it.kind)) lib.push(it); } catch(_){} }
+    for (const k of await Store.keys('brand:')){ try { const b = await Store.get(k); if (b && b.id) brands.push(b); } catch(_){} }
+    brandId = await Store.get('set:brand').catch(() => null);
+    if (!brands.length) await brandSave({id: H.uid(), name: 'Meine Marke', accentKey: 'rot'});   // auch für Einträge aus 1.1.0, die noch keine Marke tragen
+    if (!brands.some(b => b.id === brandId)) brandId = brands[0].id;
+    for (const it of lib) if (!brands.some(b => b.id === it.brand)){ it.brand = brandId; await Store.set('lib:' + it.id, it); }
     libSort(); await Promise.all(lib.filter(i => i.kind === 'overlay').map(i => H.decode(i.img).catch(() => null))); })().catch(() => null); }
-  async function libSave(it){ it.updated = Date.now(); const i = lib.findIndex(x => x.id === it.id); if (i < 0) lib.push(it); else lib[i] = it; libSort(); await Store.set('lib:' + it.id, it); return it; }
+  async function libSave(it){ it.updated = Date.now(); it.brand ||= brandId; const i = lib.findIndex(x => x.id === it.id); if (i < 0) lib.push(it); else lib[i] = it; libSort(); await Store.set('lib:' + it.id, it); return it; }
   async function libDel(id){ lib = lib.filter(x => x.id !== id); await Store.del('lib:' + id); }
   // Kleines Vorschaubild (freigestellt, mit Transparenz)
   async function thumbOf(url, maskUrl){ const im = await H.decode(url), mk = maskUrl ? await H.decode(maskUrl) : null, src = H.cutout(im, mk), w = src.naturalWidth || src.width, h = src.naturalHeight || src.height, k = Math.min(1, 220 / Math.max(w, h)), c = H.mkCanvas(w * k, h * k);
@@ -103,7 +115,7 @@
   // Hat das Bild schon einen durchsichtigen Hintergrund?
   function hasAlpha(im){ const c = H.mkCanvas(48, 48), x = c.getContext('2d', {willReadFrequently: true}); x.drawImage(im, 0, 0, 48, 48); const d = x.getImageData(0, 0, 48, 48).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] < 128) n++; return n > 48 * 48 * 0.03; }
   const nearFmt = ar => H.FORMATS.reduce((a, f) => Math.abs(Math.log(f.w / f.h / ar)) < Math.abs(Math.log(a.w / a.h / ar)) ? f : a).k;
-  // Bild in die Ablage aufnehmen. Person: freigestellte Bilder bleiben, wie sie sind; alle anderen werden freigestellt.
+  // Bild in die Markenunterlagen aufnehmen. Person: freigestellte Bilder bleiben, wie sie sind; alle anderen werden freigestellt.
   async function libAddImage(kind, url, o = {}){
     const im = await H.decode(url), ar = im.naturalWidth / im.naturalHeight, name = String(o.name || pickImage.last || KINDS.find(x => x.k === kind).one).slice(0, 60);
     if (kind === 'person'){ let pic;
@@ -117,7 +129,7 @@
   }
   // Auflagen, die bei neuen Titelbildern dieses Formats immer dabei sind (ohne die, die das Titelbild schon trägt)
   function autoTops(fmt, have){ const holder = {assets: {}}, extra = [];
-    for (const it of lib){ if (it.kind !== 'overlay' || !it.auto || !(it.formats || []).includes(fmt) || !H.imgOf({assets: {x: it.img}}, 'x')) continue; if (have && have.layers.some(L => L.lib === it.id)) continue;
+    for (const it of mine('overlay')){ if (!it.auto || !(it.formats || []).includes(fmt) || !H.imgOf({assets: {x: it.img}}, 'x')) continue; if (have && have.layers.some(L => L.lib === it.id)) continue;
       extra.push(H.overlayLayer(fmt, H.addAsset(holder, it.img), {lib: it.id, name: it.name, fmts: it.formats.slice(), band: it.band, ar: it.ar})); }
     return {assets: holder.assets, extra}; }
   // Einsetzen ins offene Titelbild
@@ -134,81 +146,101 @@
     const ins = H.topInset([L], F()); if (doc.tpl && ins.t + ins.b > 0){ doc = H.retemplate(doc, doc.tpl); toast(`„${it.name}“ liegt obenauf. Die Vorlage ist neu angeordnet, damit nichts darunter verschwindet.`); } else toast(`„${it.name}“ liegt obenauf.`);
     selId = null; commit(); inspector(); return L;
   }
+  async function useBg(it){ await setImage(bgL(), it.img); selId = null; commit(); inspector(); toast(`Hintergrund „${it.name}“ gesetzt.`); }
   async function useGraphic(it){ const id = H.addAsset(doc, it.img); await H.load(doc); const im = H.imgOf(doc, id); return addLayer(H.newLayer(doc, 'img', {img: id, name: it.name, ratio: im.naturalWidth / im.naturalHeight})); }
 
-  // Dialog der Ablage. o.kind: Reiter zu Beginn; o.pick(Bild der Person | Eintrag): statt ins Titelbild einzusetzen
+  // Dialog der Markenunterlagen. o.kind: Reiter zu Beginn; o.pick(Bild der Person | Eintrag): statt ins Titelbild einzusetzen
+  // Ansichten: Liste (Reiter), eine Person (open), die Marke selbst (view 'brand'), Eintrag in eine andere Marke legen (view 'move')
   function libDialog(o = {}){
-    let kind = o.kind || 'person', open = null;
-    const c = modal('', 'lib'), can = !!doc, K = () => KINDS.find(x => x.k === kind), items = () => lib.filter(i => i.kind === kind), item = id => lib.find(i => i.id === id);
+    let kind = o.kind || 'person', open = null, view = '', mv = null;
+    const c = modal('', 'lib'), can = !!doc, K = () => KINDS.find(x => x.k === kind), item = id => lib.find(i => i.id === id), tap = k => k === 'graphic' || k === 'bg';
     const card = (attr, thumb, body, acts) => `<div class="lib-card" ${attr}><div class="pic"><img src="${esc(thumb || '')}" alt=""></div>${body}${acts ? `<div class="acts">${acts}</div>` : ''}</div>`;
+    const moveBtn = () => brands.length > 1 ? `<button data-lb="move" title="In eine andere Marke legen" aria-label="In eine andere Marke legen">⇄</button>` : '';
     const paint = () => {
-      const p = open && item(open); let h = `<h2>Ablage</h2>`;
-      if (p){ h += `<div class="row"><button class="btn ghost" data-lb="back">‹ Personen</button><input id="lbName" value="${esc(p.name)}" maxlength="60" aria-label="Name der Person" spellcheck="false"></div>
+      const p = open && item(open), B = brand(); let h = `<h2>Markenunterlagen</h2>`;
+      if (view === 'brand'){ h += `<div class="row"><button class="btn ghost" data-lb="back">‹ Zurück</button><input id="lbBName" value="${esc(B.name)}" maxlength="60" aria-label="Name der Marke" spellcheck="false"></div>
+          <div class="f"><span>Akzentfarbe neuer Titelbilder</span><div class="acc-pop">${H.ACCENTS.map(a => `<button data-lacc="${a.k}" class="${a.k === H.accent(B.accentKey).k ? 'on' : ''}" style="background:${a.dark}" title="${esc(a.n)}" aria-label="${esc(a.n)}"></button>`).join('')}</div></div>
+          <p class="hint">${mine().length === 1 ? '1 Eintrag' : mine().length + ' Einträge'} in dieser Marke. „Sichern“ schreibt die Marke im Ganzen in eine Datei – Name, Farbe, Personen, Auflagen, Grafiken und Hintergründe. Auf einem anderen Gerät liest „Laden“ oder „Öffnen“ sie ein.</p>
+          <div class="modal-foot"><button class="btn ghost" data-lb="bdel"${brands.length > 1 ? '' : ' disabled title="Die letzte Marke bleibt"'}>Marke löschen</button><span class="grow"></span><button class="btn primary" data-lb="save">Sichern (Datei)</button><button class="btn ghost" data-lb="x">Schließen</button></div>`; }
+      else if (view === 'move'){ const it = item(mv); h += `<div class="row"><button class="btn ghost" data-lb="back">‹ Zurück</button><b>„${esc(it.name)}“ in eine andere Marke legen</b></div><div class="row wrap">${brands.filter(b => b.id !== it.brand).map(b => `<button class="btn" data-lmv="${b.id}">${esc(b.name)}</button>`).join('')}</div>`; }
+      else if (p){ h += `<div class="row"><button class="btn ghost" data-lb="back">‹ Personen</button><input id="lbName" value="${esc(p.name)}" maxlength="60" aria-label="Name der Person" spellcheck="false"></div>
           <div class="lib-grid">${p.pics.map(q => card(`data-lp="${q.id}"${can ? ' tabindex="0" title="Ins Titelbild einsetzen"' : ''}`, q.thumb, can ? `<span class="go">Einsetzen</span>` : '', `<button data-lb="delpic" title="Bild löschen" aria-label="Bild löschen">🗑</button>`)).join('') || '<p class="hint">Noch kein Bild. Füge eines hinzu.</p>'}</div>
           <p class="hint">Bilder mit durchsichtigem Hintergrund bleiben, wie sie sind. Bei allen anderen stellt HoneyThumb die Person frei.</p>
-          <div class="modal-foot"><button class="btn ghost" data-lb="delitem">Person löschen</button><span class="grow"></span><button class="btn primary" data-lb="addpic">＋ Bild hinzufügen</button><button class="btn ghost" data-lb="x">Schließen</button></div>`; }
-      else { h += `<div class="tabs">${KINDS.map(x => `<button data-lk="${x.k}" class="${x.k === kind ? 'on' : ''}">${esc(x.n)}</button>`).join('')}</div><p class="hint">${esc(K().hint)}</p><div class="lib-grid">`;
-        for (const it of items()){
+          <div class="modal-foot"><button class="btn ghost" data-lb="delitem">Person löschen</button>${brands.length > 1 ? `<button class="btn ghost" data-lb="move">⇄ Andere Marke</button>` : ''}<span class="grow"></span><button class="btn primary" data-lb="addpic">＋ Bild hinzufügen</button><button class="btn ghost" data-lb="x">Schließen</button></div>`; }
+      else { h += `<div class="row brand-row"><label class="sel-lbl grow"><span>Marke</span><select id="lbBrand" aria-label="Marke">${brands.map(b => `<option value="${b.id}"${b.id === brandId ? ' selected' : ''}>${esc(b.name)}</option>`).join('')}</select></label><button class="btn small" data-lb="bedit" title="Name, Farbe, sichern, löschen">✎ Marke</button><button class="btn small" data-lb="bnew">＋ Neue Marke</button></div>
+          <div class="tabs">${KINDS.map(x => `<button data-lk="${x.k}" class="${x.k === kind ? 'on' : ''}">${esc(x.n)}</button>`).join('')}</div><p class="hint">${esc(K().hint)}</p><div class="lib-grid">`;
+        for (const it of mine(kind)){
           if (kind === 'person') h += card(`data-li="${it.id}" tabindex="0"`, it.pics[0] && it.pics[0].thumb, `<b>${esc(it.name)}</b><span class="muted small">${it.pics.length === 1 ? '1 Bild' : it.pics.length + ' Bilder'}</span>`, `<button data-lb="edit" title="Bilder und Name bearbeiten" aria-label="Bearbeiten">✎</button>`);
-          else h += card(`data-li="${it.id}"${can && kind === 'graphic' ? ' tabindex="0" title="Ins Titelbild einsetzen"' : ''}`, it.thumb, `<input class="nm" data-ln="${it.id}" value="${esc(it.name)}" maxlength="60" aria-label="Name" spellcheck="false">` +
+          else h += card(`data-li="${it.id}"${can && tap(kind) ? ' tabindex="0" title="Ins Titelbild einsetzen"' : ''}`, it.thumb, `<input class="nm" data-ln="${it.id}" value="${esc(it.name)}" maxlength="60" aria-label="Name" spellcheck="false">` +
             (kind === 'overlay' ? `<div class="seg fm" title="Formate, für die diese Auflage gilt">${H.FORMATS.map(f => `<button data-lf="${f.k}" class="${(it.formats || []).includes(f.k) ? 'on' : ''}">${f.k}</button>`).join('')}</div><label class="chk small"><input type="checkbox" data-lauto${it.auto ? ' checked' : ''}> Immer dabei</label>` : '') +
-            (can ? `<span class="go" data-lb="use">Einsetzen</span>` : ''), `<button data-lb="delitem" title="Löschen" aria-label="Löschen">🗑</button>`); }
-        h += (items().length ? '' : `<p class="hint">Noch nichts hinterlegt.</p>`) + `</div>` + (kind === 'overlay' ? `<p class="hint">„Immer dabei“: Jedes neue Titelbild in den gewählten Formaten bekommt die Auflage von selbst.</p>` : '') +
-          `<div class="modal-foot"><button class="btn ghost small" data-lb="load" title="Ablage-Datei von einem anderen Gerät einlesen">Ablage laden</button><button class="btn ghost small" data-lb="save" title="Alle Einträge als Datei sichern – für ein anderes Gerät"${lib.length ? '' : ' disabled'}>Ablage sichern</button><span class="grow"></span><button class="btn primary" data-lb="add">＋ ${esc(K().one)}</button><button class="btn ghost" data-lb="x">Schließen</button></div>`; }
+            (can ? `<span class="go" data-lb="use">Einsetzen</span>` : ''), moveBtn() + `<button data-lb="delitem" title="Löschen" aria-label="Löschen">🗑</button>`); }
+        h += (mine(kind).length ? '' : `<p class="hint">Noch nichts hinterlegt.</p>`) + `</div>` + (kind === 'overlay' ? `<p class="hint">„Immer dabei“: Jedes neue Titelbild in den gewählten Formaten bekommt die Auflage von selbst – solange diese Marke gewählt ist.</p>` : '') +
+          `<div class="modal-foot"><button class="btn ghost small" data-lb="load" title="Markenunterlagen von einem anderen Gerät einlesen">Laden</button><button class="btn ghost small" data-lb="save" title="Diese Marke im Ganzen als Datei sichern – für ein anderes Gerät"${mine().length ? '' : ' disabled'}>Sichern</button><span class="grow"></span><button class="btn primary" data-lb="add">＋ ${esc(K().one)}</button><button class="btn ghost" data-lb="x">Schließen</button></div>`; }
       c.innerHTML = h;
     };
     const fail = e => { busy(''); toast((e && e.message) || 'Das hat nicht geklappt.'); };
-    const use = async (it, pic) => { closeModal(); try { if (o.pick) await o.pick(pic || it); else if (it.kind === 'person') await usePerson(pic); else if (it.kind === 'overlay') await useOverlay(it); else await useGraphic(it); } catch(e){ fail(e); } };
+    const use = async (it, pic) => { closeModal(); try { if (o.pick) await o.pick(pic || it); else if (it.kind === 'person') await usePerson(pic); else if (it.kind === 'overlay') await useOverlay(it); else if (it.kind === 'bg') await useBg(it); else await useGraphic(it); } catch(e){ fail(e); } };
     c.addEventListener('click', async e => {
       const t = e.target, b = t.closest('[data-lb]'), a = b && b.dataset.lb, cd = t.closest('.lib-card'), it = cd && cd.dataset.li ? item(cd.dataset.li) : open ? item(open) : null;
       try {
         if (t.closest('[data-lk]')){ kind = t.closest('[data-lk]').dataset.lk; paint(); }
         else if (a === 'x') closeModal();
-        else if (a === 'back'){ open = null; paint(); }
-        else if (a === 'save') libFile();
+        else if (a === 'back'){ if (view) view = ''; else open = null; paint(); }
+        else if (a === 'save') brandFile();
         else if (a === 'load'){ closeModal(); $('#homeImport').click(); }
+        else if (a === 'bedit'){ view = 'brand'; paint(); }
+        else if (a === 'bnew'){ const n = await brandSave({id: H.uid(), name: 'Neue Marke', accentKey: 'rot'}); await brandUse(n.id); view = 'brand'; open = null; paint(); const i = $('#lbBName'); i.focus(); i.select(); }
+        else if (a === 'bdel'){ const B = brand(); if (brands.length > 1 && confirm(`Die Marke „${B.name}“ mit allen ${mine().length} Einträgen löschen? Titelbilder, die sie schon tragen, behalten ihre Bilder.`)){ await brandDel(B.id); view = ''; paint(); } }
+        else if (t.closest('[data-lacc]')){ const B = brand(); B.accentKey = t.closest('[data-lacc]').dataset.lacc; await brandSave(B); await brandUse(B.id); paint(); }
+        else if (a === 'move'){ mv = it.id; view = 'move'; paint(); }
+        else if (t.closest('[data-lmv]')){ const m = item(mv), to = brands.find(x => x.id === t.closest('[data-lmv]').dataset.lmv); m.brand = to.id; await libSave(m); view = ''; open = null; paint(); toast(`„${m.name}“ liegt jetzt bei „${to.name}“.`); }
         else if (a === 'add'){ if (kind === 'person'){ const n = await libSave({id: H.uid(), kind, name: 'Neue Person', pics: []}); open = n.id; paint(); const i = $('#lbName'); i.focus(); i.select(); }
           else { const url = await pickImage(); if (!url) return; await libAddImage(kind, url); paint(); if (kind === 'overlay') toast('Hinterlegt. Die Auflage ist bei neuen Titelbildern im passenden Format immer dabei.'); } }
         else if (a === 'addpic'){ const url = await pickImage(); if (!url) return; await libAddImage('person', url, {id: open}); paint(); }
-        else if (a === 'delpic'){ const p = item(open), q = cd.dataset.lp; if (confirm('Dieses Bild aus der Ablage löschen?')){ p.pics = p.pics.filter(x => x.id !== q); await libSave(p); paint(); } }
-        else if (a === 'delitem'){ if (it && confirm(`„${it.name}“ aus der Ablage löschen? Titelbilder, die es schon tragen, behalten es.`)){ await libDel(it.id); open = null; paint(); } }
+        else if (a === 'delpic'){ const p = item(open), q = cd.dataset.lp; if (confirm('Dieses Bild aus den Markenunterlagen löschen?')){ p.pics = p.pics.filter(x => x.id !== q); await libSave(p); paint(); } }
+        else if (a === 'delitem'){ if (it && confirm(`„${it.name}“ aus den Markenunterlagen löschen? Titelbilder, die es schon tragen, behalten es.`)){ await libDel(it.id); open = null; paint(); } }
         else if (a === 'edit'){ open = it.id; paint(); }
         else if (t.closest('[data-lf]')){ const f = t.closest('[data-lf]').dataset.lf; it.formats = (it.formats || []).includes(f) ? it.formats.filter(x => x !== f) : [...(it.formats || []), f]; await libSave(it); paint(); }
-        else if (t.closest('input,label')) return;
+        else if (t.closest('input,label,select')) return;
         else if (cd && cd.dataset.lp){ if (can) await use(item(open), item(open).pics.find(q => q.id === cd.dataset.lp)); }
-        else if (cd && it){ if (it.kind === 'person'){ if (can && it.pics.length === 1) await use(it, it.pics[0]); else { open = it.id; paint(); } } else if (can && (a === 'use' || it.kind === 'graphic')) await use(it); }
+        else if (cd && it){ if (it.kind === 'person'){ if (can && it.pics.length === 1) await use(it, it.pics[0]); else { open = it.id; paint(); } } else if (can && (a === 'use' || tap(it.kind))) await use(it); }
       } catch(err){ fail(err); }
     });
     c.addEventListener('change', async e => { const t = e.target;
-      if (t.id === 'lbName'){ const p = item(open); p.name = t.value.trim() || 'Person'; await libSave(p); }
+      if (t.id === 'lbBrand'){ await brandUse(t.value); open = null; paint(); }
+      else if (t.id === 'lbBName'){ const B = brand(); B.name = t.value.trim() || 'Marke'; await brandSave(B); }
+      else if (t.id === 'lbName'){ const p = item(open); p.name = t.value.trim() || 'Person'; await libSave(p); }
       else if (t.dataset.ln){ const it = item(t.dataset.ln); it.name = t.value.trim() || K().one; await libSave(it); }
       else if ('lauto' in t.dataset){ const it = item(t.closest('.lib-card').dataset.li); it.auto = t.checked; await libSave(it); } });
     c.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.classList.contains('lib-card')) e.target.click(); else if (e.key === 'Enter' && e.target.tagName === 'INPUT') e.target.blur(); });
     libReady().then(paint);
   }
-  // Bild einer Ebene in der Ablage hinterlegen: freigestellte Bilder bei einer Person, alle anderen als Grafik
+  // Bild einer Ebene in den Markenunterlagen hinterlegen: freigestellte Bilder bei einer Person, den Hintergrund als Hintergrund, alle anderen als Grafik
   function toLibDialog(L){
-    const person = L.slot === 'person' || !!L.mask, ps = lib.filter(i => i.kind === 'person'), u = id => doc.assets[id] || null;
-    const c = modal(`<h2>In der Ablage hinterlegen</h2>` + (person ? `<label class="f"><span>Neue Person</span><input id="tlName" placeholder="Name der Person" maxlength="60" spellcheck="false"></label>
+    const isBg = L.type === 'bg', person = !isBg && (L.slot === 'person' || !!L.mask), ps = mine('person'), u = id => doc.assets[id] || null;
+    const c = modal(`<h2>Hinterlegen in „${esc(brand().name)}“</h2>` + (person ? `<label class="f"><span>Neue Person</span><input id="tlName" placeholder="Name der Person" maxlength="60" spellcheck="false"></label>
         ${ps.length ? `<div class="f"><span>Oder als weiteres Bild zu</span><div class="row wrap">${ps.map(p => `<button class="btn small" data-tp="${p.id}">${esc(p.name)}</button>`).join('')}</div></div>` : ''}`
-      : `<label class="f"><span>Name der Grafik</span><input id="tlName" value="${esc(L.name || '')}" placeholder="z. B. Logo" maxlength="60" spellcheck="false"></label>`) +
+      : `<label class="f"><span>Name</span><input id="tlName" value="${esc(L.name || '')}" placeholder="${isBg ? 'z. B. Studio' : 'z. B. Logo'}" maxlength="60" spellcheck="false"></label>`) +
       `<div class="modal-foot"><button class="btn ghost" id="tlX">Abbrechen</button><button class="btn primary" id="tlOk">Hinterlegen</button></div>`, 'narrow');
     const done = async id => { const name = $('#tlName').value.trim(); if (!id && !name){ $('#tlName').focus(); return toast('Gib einen Namen ein.'); } closeModal();
-      try { const it = person ? await libAddImage('person', u(L.img), {id, name, pic: {img: u(L.img), mask: u(L.mask), src: u(L.src)}}) : await libAddImage('graphic', u(L.img), {name}); toast(`In der Ablage hinterlegt: ${it.name}`); inspector(); } catch(e){ toast(e.message || 'Das hat nicht geklappt.'); } };
+      try { const it = person ? await libAddImage('person', u(L.img), {id, name, pic: {img: u(L.img), mask: u(L.mask), src: u(L.src)}}) : await libAddImage(isBg ? 'bg' : 'graphic', u(isBg ? L.fill.img : L.img), {name}); toast(`Hinterlegt: ${it.name}`); inspector(); } catch(e){ toast(e.message || 'Das hat nicht geklappt.'); } };
     c.addEventListener('click', e => { const p = e.target.closest('[data-tp]'); if (p) done(p.dataset.tp); else if (e.target.id === 'tlOk') done(null); else if (e.target.id === 'tlX') closeModal(); });
     c.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'tlName') done(null); });
     if (!compact()) $('#tlName').focus();
   }
-  // Ablage als Datei: sichern und einlesen (Einträge mit derselben Kennung werden ersetzt)
-  async function libFile(){ await saveBlob(new Blob([JSON.stringify({app: 'honeythumb-ablage', v: 1, items: lib})], {type: 'application/json'}), 'HoneyThumb-Ablage.json'); }
+  // Markenunterlagen als Datei: eine Marke im Ganzen sichern und einlesen (Marke und Einträge mit derselben Kennung werden ersetzt).
+  // Gelesen werden auch Dateien aus 1.1.0 (ohne Marke): ihre Einträge kommen in die gewählte Marke.
+  async function brandFile(){ const B = brand(); await saveBlob(new Blob([JSON.stringify({app: 'honeythumb-marke', v: 1, brand: {id: B.id, name: B.name, accentKey: B.accentKey}, items: mine()})], {type: 'application/json'}), `Markenunterlagen-${safeName(B.name)}.json`); }
   async function libImport(raw){
-    await libReady(); const ok = u => typeof u === 'string' && DATA.test(u), opt = u => u == null || ok(u), str = (v, d) => String(v || d).slice(0, 60); let n = 0;
-    for (const r of Array.isArray(raw.items) ? raw.items.slice(0, 500) : []){ if (!r || typeof r.id !== 'string' || !/^[\w-]{1,40}$/.test(r.id)) continue; let it = null;
-      if (r.kind === 'person' && Array.isArray(r.pics)) it = {id: r.id, kind: 'person', name: str(r.name, 'Person'), pics: r.pics.filter(q => q && ok(q.img) && opt(q.mask) && opt(q.src) && opt(q.thumb)).slice(0, 60).map(q => ({id: /^[\w-]{1,40}$/.test(q.id || '') ? q.id : H.uid(), img: q.img, mask: q.mask || null, src: q.src || null, thumb: q.thumb || q.img}))};
-      else if ((r.kind === 'overlay' || r.kind === 'graphic') && ok(r.img)){ const im = await H.decode(r.img).catch(() => null); if (!im) continue; it = {id: r.id, kind: r.kind, name: str(r.name, r.kind === 'overlay' ? 'Auflage' : 'Grafik'), img: r.img, ar: im.naturalWidth / im.naturalHeight, thumb: ok(r.thumb) ? r.thumb : await thumbOf(r.img)};
+    await libReady(); const ID = /^[\w-]{1,40}$/, ok = u => typeof u === 'string' && DATA.test(u), opt = u => u == null || ok(u), str = (v, d) => String(v || d).slice(0, 60), ONE = {overlay: 'Auflage', graphic: 'Grafik', bg: 'Hintergrund'}; let n = 0, B = null;
+    if (raw.app === 'honeythumb-marke' && raw.brand && typeof raw.brand.id === 'string' && ID.test(raw.brand.id)){ B = await brandSave({id: raw.brand.id, name: str(raw.brand.name, 'Marke'), accentKey: H.accent(raw.brand.accentKey).k}); await brandUse(B.id); }
+    for (const r of Array.isArray(raw.items) ? raw.items.slice(0, 500) : []){ if (!r || typeof r.id !== 'string' || !ID.test(r.id)) continue; let it = null;
+      if (r.kind === 'person' && Array.isArray(r.pics)) it = {id: r.id, kind: 'person', name: str(r.name, 'Person'), pics: r.pics.filter(q => q && ok(q.img) && opt(q.mask) && opt(q.src) && opt(q.thumb)).slice(0, 60).map(q => ({id: ID.test(q.id || '') ? q.id : H.uid(), img: q.img, mask: q.mask || null, src: q.src || null, thumb: q.thumb || q.img}))};
+      else if (ONE[r.kind] && ok(r.img)){ const im = await H.decode(r.img).catch(() => null); if (!im) continue; it = {id: r.id, kind: r.kind, name: str(r.name, ONE[r.kind]), img: r.img, ar: im.naturalWidth / im.naturalHeight, thumb: ok(r.thumb) ? r.thumb : await thumbOf(r.img)};
         if (r.kind === 'overlay'){ it.band = H.bandOf(im); it.formats = (Array.isArray(r.formats) ? r.formats : []).filter(f => H.FORMATS.some(x => x.k === f)); it.auto = !!r.auto; } }
-      if (it){ await libSave(it); n++; } }
-    toast(n ? `Ablage eingelesen: ${n} ${n === 1 ? 'Eintrag' : 'Einträge'}.` : 'In dieser Datei stehen keine Einträge für die Ablage.'); if (n) libDialog();
+      if (it){ it.brand = brandId; await libSave(it); n++; } }
+    const cnt = `${n} ${n === 1 ? 'Eintrag' : 'Einträge'}`;
+    toast(B ? `Markenunterlagen „${B.name}“ eingelesen: ${cnt}.` : n ? `Eingelesen in „${brand().name}“: ${cnt}.` : 'In dieser Datei stehen keine Markenunterlagen.'); if (B || n) libDialog();
   }
 
   // Neues Titelbild: Format und Vorlage wählen. pre: {url} – ein schon gewähltes Bild
@@ -220,10 +252,10 @@
       <div class="modal-foot"><button class="btn ghost" id="ndCancel">Abbrechen</button><button class="btn" id="ndBlank">Leer beginnen</button></div>`);
     const paint = () => { $$('#ndFmt button').forEach(b => b.classList.toggle('on', b.dataset.f === fmt));
       const g = $('#ndGrid'); g.innerHTML = '';
-      for (const t of H.TEMPLATES){ const b = document.createElement('button'); b.dataset.t = t.id; const d = H.fromTemplate(t.id, fmt, {}, autoTops(fmt)); b.append(H.render(d, 340, {edit: true})); const s = document.createElement('span'); s.textContent = t.n; b.append(s); g.append(b); } };
-    const start = async tpl => { closeModal(); const ax = autoTops(fmt); let d = tpl ? H.fromTemplate(tpl, fmt, {}, ax) : H.blank(fmt);
-      if (!tpl){ Object.assign(d.assets, ax.assets); d.layers.push(...ax.extra); }
-      if (pre && pre.url){ const id = H.addAsset(d, pre.url); if (tpl) d = H.fromTemplate(tpl, fmt, {person: {img: id, mask: null}}, {id: d.id, assets: d.assets, extra: ax.extra}); else { await H.load(d); const im = H.imgOf(d, id); d.layers.push(H.newLayer(d, 'img', {img: id, ratio: im.naturalWidth / im.naturalHeight})); } }
+      for (const t of H.TEMPLATES){ const b = document.createElement('button'); b.dataset.t = t.id; const d = H.fromTemplate(t.id, fmt, {}, {...autoTops(fmt), accentKey: brand().accentKey}); b.append(H.render(d, 340, {edit: true})); const s = document.createElement('span'); s.textContent = t.n; b.append(s); g.append(b); } };
+    const start = async tpl => { closeModal(); const ax = {...autoTops(fmt), accentKey: brand().accentKey}; let d = tpl ? H.fromTemplate(tpl, fmt, {}, ax) : H.blank(fmt);
+      if (!tpl){ Object.assign(d.assets, ax.assets); d.layers.push(...ax.extra); d.accentKey = H.accent(ax.accentKey).k; d.accent = H.accent(ax.accentKey).dark; }
+      if (pre && pre.url){ const id = H.addAsset(d, pre.url); if (tpl) d = H.fromTemplate(tpl, fmt, {person: {img: id, mask: null}}, {id: d.id, assets: d.assets, extra: ax.extra, accentKey: ax.accentKey}); else { await H.load(d); const im = H.imgOf(d, id); d.layers.push(H.newLayer(d, 'img', {img: id, ratio: im.naturalWidth / im.naturalHeight})); } }
       await openDoc(d, true); if (ax.extra.length) toast(`Auflage „${ax.extra.map(L => L.name).join('“, „')}“ ist dabei – sie liegt immer ganz oben.`);
       const p = doc.layers.find(L => L.type === 'img' && L.slot === 'person' && L.img && !L.mask); if (p){ select(p.id); await cutLayer(p, true); } };
     H.fonts().then(libReady).then(paint);
@@ -369,9 +401,9 @@
     $('#inspTitle').textContent = layerName(L);
     if (L.type === 'bg'){ const fl = L.fill ||= {kind: 'color'}; if (fl.c && !fl.a){ fl.a = fl.c; } delete fl.c; const k = fl.kind;
       h += fSeg(L, 'fill.kind', 'Art', H.BG_KINDS.map(b => [b.k, b.n]), 'color');
-      if (k === 'img'){ h += `<div class="row wrap">${btn('pick', fl.img ? 'Bild ersetzen' : 'Bild wählen', fl.img ? '' : 'primary')}</div>`;
+      if (k === 'img'){ h += `<div class="row wrap">${btn('pick', fl.img ? 'Bild ersetzen' : 'Bild wählen', fl.img ? '' : 'primary')}${btn('libbg', 'Aus den Markenunterlagen')}${fl.img ? btn('tolib', 'Hinterlegen') : ''}</div>`;
         if (fl.img) h += fRange(L, 'fill.blur', 'Weichzeichnen', 0, 40, 1, 0) + fRange(L, 'fill.dim', 'Abdunkeln', 0, 0.9, 0.01, 0) + fChk(L, 'fill.gray', 'Schwarz-weiß') + fRange(L, 'fill.zoom', 'Vergrößern', 1, 3, 0.01, 1) + fRange(L, 'fill.pos.x', 'Ausschnitt waagerecht', 0, 1, 0.01, 0.5) + fRange(L, 'fill.pos.y', 'Ausschnitt senkrecht', 0, 1, 0.01, 0.5); }
-      else { h += fColor(L, 'fill.a', 'Farbe', {def: PAL.ink}); if (k !== 'color') h += fColor(L, 'fill.b', 'Zweite Farbe', {def: PAL.ink2}); }
+      else { if (mine('bg').length) h += `<div class="row wrap">${btn('libbg', 'Hintergrund aus den Markenunterlagen')}</div>`; h += fColor(L, 'fill.a', 'Farbe', {def: PAL.ink}); if (k !== 'color') h += fColor(L, 'fill.b', 'Zweite Farbe', {def: PAL.ink2}); }
       if (k === 'grad') h += fRange(L, 'fill.ang', 'Richtung', 0, 360, 5, 90);
       if (k === 'rays') h += fRange(L, 'fill.cx', 'Mitte waagerecht', 0, 1, 0.01, 0.5) + fRange(L, 'fill.cy', 'Mitte senkrecht', 0, 1, 0.01, 0.5) + fRange(L, 'fill.n', 'Strahlen', 4, 40, 1, 14);
       if (k === 'diag') h += fRange(L, 'fill.split', 'Teilung', 0.1, 0.9, 0.01, 0.5) + fRange(L, 'fill.slant', 'Schräge', -0.5, 0.5, 0.01, 0.16);
@@ -390,15 +422,15 @@
         h += grp('Kontur und Schatten', fTog(L, 'stroke', 'Kontur', {w: 6, c: PAL.ink}) + (L.stroke ? fRange(L, 'stroke.w', 'Stärke', 1, 30, 0.5, 6) + fColor(L, 'stroke.c', 'Farbe') : '') + fTog(L, 'shadow', 'Schatten', {b: 18, x: 0, y: 8, c: 'rgba(0,0,0,0.5)'}));
       }
       if (L.type === 'img' && L.top){
-        h += `<p class="hint">Auflage aus der Ablage. Sie liegt immer ganz oben; die Vorlage ordnet Texte und Bilder in der freien Fläche an.</p>` + fRange(L, 'op', 'Deckkraft', 0, 1, 0.01, 1) + `<div class="row wrap">${btn('lock', L.lock ? 'Entsperren (verschieben)' : 'Sperren')}${btn('del', 'Aus diesem Titelbild nehmen')}${btn('lib-overlay', 'Ablage öffnen')}</div>`;
+        h += `<p class="hint">Auflage aus den Markenunterlagen. Sie liegt immer ganz oben; die Vorlage ordnet Texte und Bilder in der freien Fläche an.</p>` + fRange(L, 'op', 'Deckkraft', 0, 1, 0.01, 1) + `<div class="row wrap">${btn('lock', L.lock ? 'Entsperren (verschieben)' : 'Sperren')}${btn('del', 'Aus diesem Titelbild nehmen')}${btn('lib-overlay', 'Markenunterlagen öffnen')}</div>`;
         el.innerHTML = h; return; }
       if (L.type === 'img'){
-        if (!L.img) h += `<div class="big-drop"><span>${L.slot === 'person' ? 'Hier kommt die Person hin.' : 'Hier kommt ein Bild hin.'}</span>${L.slot === 'person' ? btn('libperson', 'Person aus der Ablage', lib.some(i => i.kind === 'person' && i.pics.length) ? 'primary' : '') + btn('pickcut', 'Bild wählen und freistellen', lib.some(i => i.kind === 'person' && i.pics.length) ? '' : 'primary') + btn('pick', 'Bild ohne Freistellen') : btn('pick', 'Bild wählen', 'primary') + btn('pickcut', 'Bild wählen und Person freistellen') + btn('libgraphic', 'Aus der Ablage')}</div>`;
+        if (!L.img) h += `<div class="big-drop"><span>${L.slot === 'person' ? 'Hier kommt die Person hin.' : 'Hier kommt ein Bild hin.'}</span>${L.slot === 'person' ? btn('libperson', 'Person aus den Markenunterlagen', mine('person').some(i => i.pics.length) ? 'primary' : '') + btn('pickcut', 'Bild wählen und freistellen', mine('person').some(i => i.pics.length) ? '' : 'primary') + btn('pick', 'Bild ohne Freistellen') : btn('pick', 'Bild wählen', 'primary') + btn('pickcut', 'Bild wählen und Person freistellen') + btn('libgraphic', 'Aus den Markenunterlagen')}</div>`;
         else { h += `<div class="row wrap">${btn('pick', 'Bild ersetzen')}${L.mask ? btn('mask', 'Maske nachbessern') + btn('uncut', 'Freistellung aufheben') : btn('cut', 'Person freistellen', 'primary')}</div>`;
           h += fSeg(L, 'fit', 'Im Feld', [['contain', 'Ganz zeigen'], ['cover', 'Feld füllen']], 'cover') + fRange(L, 'zoom', 'Vergrößern', 1, 3, 0.01, 1) + fRange(L, 'pos.x', 'Lage waagerecht', 0, 1, 0.01, 0.5) + fRange(L, 'pos.y', 'Lage senkrecht', 0, 1, 0.01, 0.5);
           h += `<div class="row wrap">${fChk(L, 'flip', 'Spiegeln')}${fChk(L, 'gray', 'Schwarz-weiß')}</div>`;
           h += grp('Umriss und Schatten', fTog(L, 'outline', 'Umriss', {w: 9, c: PAL.cream}) + (L.outline ? fRange(L, 'outline.w', 'Stärke', 1, 40, 0.5, 9) + fColor(L, 'outline.c', 'Farbe') : '') + fTog(L, 'shadow', 'Schatten', {b: 40, x: 0, y: 14, c: 'rgba(0,0,0,0.45)'}));
-          h += grp('Ablage', `<div class="row wrap">${btn('tolib', 'In der Ablage hinterlegen')}${btn(L.slot === 'person' || L.mask ? 'libperson' : 'libgraphic', 'Aus der Ablage ersetzen')}</div>`);
+          h += grp('Markenunterlagen', `<div class="row wrap">${btn('tolib', 'Hinterlegen')}${btn(L.slot === 'person' || L.mask ? 'libperson' : 'libgraphic', 'Daraus ersetzen')}</div>`);
           if (!L.mask) h += grp('Rahmen', fRange(L, 'round', 'Ecken runden', 0, Math.round(u * 0.3), 1, 0) + fTog(L, 'frame', 'Rahmen', {w: 10, c: PAL.cream}) + (L.frame ? fRange(L, 'frame.w', 'Stärke', 1, 40, 0.5, 10) + fColor(L, 'frame.c', 'Farbe') : '')); }
       }
       if (L.type === 'shape'){ h += `<label class="f"><span>Form</span><select data-k="shape">${H.SHAPES.map(x => `<option value="${x.k}"${x.k === L.shape ? ' selected' : ''}>${esc(x.n)}</option>`).join('')}</select></label>` + fColor(L, 'fill', 'Farbe', {def: doc.accent});
@@ -435,6 +467,7 @@
     else if (a === 'libperson') libDialog({kind: 'person', pick: async pic => { await putPerson(L, pic); commit(); select(L.id); }});
     else if (a === 'libgraphic') libDialog({kind: 'graphic', pick: async it => { await setImage(L, it.img); commit(); select(L.id); }});
     else if (a === 'lib-overlay') libDialog({kind: 'overlay'});
+    else if (a === 'libbg') libDialog({kind: 'bg'});
     else if (a === 'tolib') toLibDialog(L);
     else if (a === 'dup'){ const c = H.clone(L); c.id = H.uid(); delete c.slot; c.user = true; c.x += 30; c.y += 30; doc.layers.splice(i + 1, 0, c); commit(); select(c.id); }
     else if (a === 'lock'){ L.lock = !L.lock; commit(); inspector(); }
@@ -504,7 +537,7 @@
 
   // ───────── Öffnen und Importieren ─────────
   async function importFile(file){
-    try { if (/\.(honeythumb|json)$/i.test(file.name)){ const raw = JSON.parse(await file.text()); if (raw && raw.app === 'honeythumb-ablage') return void await libImport(raw); const d = H.parse(raw); if (doc) await saveNow(); await openDoc(d, true); toast(`„${d.name}“ geöffnet`); }
+    try { if (/\.(honeythumb|json)$/i.test(file.name)){ const raw = JSON.parse(await file.text()); if (raw && (raw.app === 'honeythumb-marke' || raw.app === 'honeythumb-ablage')) return void await libImport(raw); const d = H.parse(raw); if (doc) await saveNow(); await openDoc(d, true); toast(`„${d.name}“ geöffnet`); }
       else if (/^image\//.test(file.type) || /\.(png|jpe?g|webp|gif)$/i.test(file.name)){ busy('Lade Bild …'); const url = await normalize(file); busy('');
         if (doc){ const id = H.addAsset(doc, url); await H.load(doc); const im = H.imgOf(doc, id); addLayer(H.newLayer(doc, 'img', {img: id, ratio: im.naturalWidth / im.naturalHeight})); } else newDialog({url}); }
       else toast('Diese Datei kann HoneyThumb nicht öffnen.'); }
@@ -539,7 +572,7 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden && doc) saveNow(); });
 
   // Für Prüfläufe und Fehlersuche
-  window.HT = {get lib(){ return lib; }, libDialog, libSave, libAddImage, usePerson, useOverlay, useGraphic, libImport, libFile, setFormat,
+  window.HT = {get lib(){ return lib; }, libDialog, libSave, libAddImage, usePerson, useOverlay, useGraphic, libImport, brandFile, brandSave, brandUse, get brand(){ return brand(); }, get brands(){ return brands; }, mine, useBg, setFormat,
     get doc(){ return doc; }, get sel(){ return selId; }, select, commit, openDoc, showHome, newDialog, saveNow, Store, act, cutLayer, importFile, get scale(){ return sc; }};
 
   // ───────── Start ─────────

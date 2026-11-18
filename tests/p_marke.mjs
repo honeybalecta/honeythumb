@@ -1,7 +1,7 @@
-// HoneyThumb 1.1: Ablage – Personen, Auflagen (immer ganz oben, je Format, „immer dabei“), Grafiken; freie Fläche der Vorlagen unter einer Auflage;
-// Formatwechsel, Rückgängig, Hinterlegen aus dem Titelbild, Ablage als Datei, Neustart, Handy-Ansicht.
+// HoneyThumb 1.2: Markenunterlagen – Personen, Auflagen (immer ganz oben, je Format, „immer dabei“), Grafiken, Hintergründe; freie Fläche der Vorlagen unter einer Auflage;
+// Formatwechsel, Rückgängig, Hinterlegen aus dem Titelbild, Neustart, mehrere Marken, eine Marke im Ganzen als Datei, Handy-Ansicht.
 import { launch, sleep, pruefung, FOTO } from './drv.mjs';
-const { chk, ende } = pruefung('HoneyThumb – Ablage');
+const { chk, ende } = pruefung('HoneyThumb – Markenunterlagen');
 let { browser, ctx, page, logs } = await launch();
 const ev = (f, a) => page.evaluate(f, a);
 // Künstliches Banner 1080 × 1920: oben durchsichtig, die unteren 20 % decken (Blau), dazu ein freigestelltes PNG und ein Logo
@@ -17,8 +17,8 @@ const top = () => ev(() => { const F = HoneyThumb.format(HT.doc.format), ls = HT
 try {
   // ═════════ Ablage in der Übersicht ═════════
   await page.click('#homeLib'); await page.waitForSelector('.modal-card.lib [data-lk]');
-  const l0 = await ev(() => ({ tabs: [...document.querySelectorAll('.modal-card.lib [data-lk]')].map(b => b.textContent), leer: !!document.querySelector('.lib-grid .hint'), add: document.querySelector('[data-lb="add"]').textContent, save: document.querySelector('[data-lb="save"]').disabled }));
-  chk('Die Ablage hat drei Reiter – Personen, Auflagen, Grafiken – und ist anfangs leer', l0.tabs.join() === 'Personen,Auflagen,Grafiken' && l0.leer && /Person/.test(l0.add) && l0.save, l0);
+  const l0 = await ev(() => ({ marke: document.querySelector('#lbBrand').selectedOptions[0].textContent, tabs: [...document.querySelectorAll('.modal-card.lib [data-lk]')].map(b => b.textContent), leer: !!document.querySelector('.lib-grid .hint'), add: document.querySelector('[data-lb="add"]').textContent, save: document.querySelector('[data-lb="save"]').disabled }));
+  chk('Die Markenunterlagen haben vier Reiter – Personen, Auflagen, Grafiken, Hintergründe – und sind anfangs leer; es gibt die Marke „Meine Marke“', l0.tabs.join() === 'Personen,Auflagen,Grafiken,Hintergründe' && l0.marke === 'Meine Marke' && l0.leer && /Person/.test(l0.add) && l0.save, l0);
   await page.click('[data-lb="x"]');
 
   // ═════════ Auflage hinterlegen ═════════
@@ -150,6 +150,51 @@ try {
   const bad = await ev(async () => { const n = HT.lib.length; await HT.libImport({ app: 'honeythumb-ablage', items: [{ id: 'x1', kind: 'overlay', name: 'Böse', img: 'javascript:alert(1)' }, { id: '../x', kind: 'graphic', img: 'data:image/png;base64,AAAA' }, { id: 'x3', kind: 'person', name: 'Leer', pics: [{ img: 'http://example.org/a.png' }] }] }); return { more: HT.lib.length - n, leer: HT.lib.find(i => i.id === 'x3')?.pics.length }; });
   chk('Eine Ablage-Datei mit fremden Adressen statt Bildern wird nicht übernommen', bad.more === 1 && bad.leer === 0, bad);
   await ev(() => document.querySelector('[data-lb="x"]')?.click());
+
+  // ═════════ Hintergründe ═════════
+  await page.click('#homeNew'); await page.waitForSelector('#ndGrid canvas'); await page.click('#ndFmt [data-f="16:9"]'); await page.click('#ndGrid [data-t="schlagzeile"]'); await page.waitForFunction(() => HT.doc); await sleep(200);
+  await ev(async logo => { await HT.libAddImage('bg', eval(logo), { name: 'Studio' }); }, LOGO);
+  await page.click('#addBar [data-add="lib"]'); await page.click('[data-lk="bg"]'); await page.click('.lib-card[data-li] .pic'); await sleep(300);
+  const b1 = await ev(() => { const b = HT.doc.layers[0]; return { kind: b.fill.kind, img: !!HT.doc.assets[b.fill.img], n: HT.doc.layers.filter(l => l.type === 'bg').length, acts: [...document.querySelectorAll('#insp [data-act]')].map(x => x.dataset.act) }; });
+  chk('Ein Hintergrund aus den Markenunterlagen liegt hinter allem; im Bild ist er zu sehen', b1.kind === 'img' && b1.img && b1.n === 1 && near(await px(0.97, 0.03), [40, 200, 80], 60) && b1.acts.includes('libbg') && b1.acts.includes('tolib'), { b1, p: await px(0.97, 0.03) });
+  await page.click('#insp [data-act="tolib"]'); await page.fill('#tlName', 'Wiese'); await page.click('#tlOk'); await sleep(300);
+  chk('Der Hintergrund eines Titelbilds lässt sich hinterlegen', await ev(() => HT.mine('bg').map(i => i.name).join() === 'Studio,Wiese'));
+  await ev(() => document.querySelector('#edBack').click()); await page.waitForFunction(() => !document.querySelector('#home').classList.contains('hidden'));
+
+  // ═════════ Mehrere Marken ═════════
+  await page.click('#homeLib'); await page.click('[data-lb="bnew"]'); await page.waitForSelector('#lbBName');
+  await page.fill('#lbBName', 'Katrin Fey'); await page.dispatchEvent('#lbBName', 'change'); await page.click('[data-lacc="blau"]'); await sleep(150); await page.click('[data-lb="back"]'); await sleep(100);
+  const m0 = await ev(() => ({ sel: document.querySelector('#lbBrand').selectedOptions[0].textContent, n: HT.brands.length, leer: !!document.querySelector('.lib-grid .hint'), mine: HT.mine().length, all: HT.lib.length, acc: getComputedStyle(document.documentElement).getPropertyValue('--acc').trim() }));
+  chk('Eine neue Marke „Katrin Fey“ ist gewählt und leer; die Einträge der anderen Marke bleiben, wo sie sind', m0.sel === 'Katrin Fey' && m0.n === 2 && m0.leer && m0.mine === 0 && m0.all >= 6 && m0.acc.toLowerCase() === '#6f9bea', m0);
+  await page.click('[data-lb="x"]'); await page.click('#homeNew'); await page.waitForSelector('#ndGrid canvas'); await page.click('#ndFmt [data-f="9:16"]'); await page.click('#ndGrid [data-t="rechts"]'); await page.waitForFunction(() => HT.doc); await sleep(200);
+  const m1 = await ev(() => ({ tops: HT.doc.layers.filter(l => l.top).length, acc: HT.doc.accentKey, kicker: HT.doc.layers.find(l => l.slot === 'kicker').color }));
+  chk('Ein neues Titelbild dieser Marke trägt ihre Akzentfarbe und keine Auflage der anderen Marke', m1.tops === 0 && m1.acc === 'blau' && m1.kicker.toLowerCase() === '#6f9bea', m1);
+  await ev(logo => HT.libAddImage('graphic', eval(logo), { name: 'Fey-Logo' }), LOGO);
+  await ev(() => document.querySelector('#edBack').click()); await page.waitForFunction(() => !document.querySelector('#home').classList.contains('hidden'));
+  await page.click('#homeLib'); await page.selectOption('#lbBrand', { label: 'Meine Marke' }); await sleep(150); await page.click('[data-lk="graphic"]');
+  await page.click('.lib-card [data-lb="move"]'); await page.click('[data-lmv]'); await sleep(200);
+  const m2 = await ev(() => ({ here: HT.mine('graphic').length, there: HT.lib.filter(i => i.kind === 'graphic' && i.brand !== HT.brand.id).map(i => i.name).sort().join() }));
+  chk('Ein Eintrag lässt sich in eine andere Marke legen', m2.here === 0 && m2.there === 'Fey-Logo,Logo', m2);
+
+  // ═════════ Eine Marke im Ganzen sichern und auf einem „anderen Gerät“ einlesen ═════════
+  await page.selectOption('#lbBrand', { label: 'Katrin Fey' }); await sleep(150);
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('[data-lb="save"]')]);
+  const roh = (await import('node:fs')).readFileSync(await dl.path()), marke = JSON.parse(roh.toString('utf8')), datei = { name: dl.suggestedFilename(), mimeType: 'application/json', buffer: roh };
+  chk('„Sichern“ schreibt die Marke im Ganzen in eine Datei: Name, Farbe und ihre Einträge – nur ihre', dl.suggestedFilename() === 'Markenunterlagen-Katrin Fey.json' && marke.app === 'honeythumb-marke' && marke.brand.name === 'Katrin Fey' && marke.brand.accentKey === 'blau' && marke.items.map(i => i.name).sort().join() === 'Fey-Logo,Logo', { n: dl.suggestedFilename(), items: marke.items.map(i => i.name) });
+  await page.click('[data-lb="bedit"]'); page.once('dialog', d => d.accept()); await page.click('[data-lb="bdel"]'); await sleep(250);
+  const m3 = await ev(() => ({ n: HT.brands.length, name: HT.brand.name, logos: HT.lib.filter(i => i.kind === 'graphic').length, del: (document.querySelector('[data-lb="bedit"]').click(), document.querySelector('[data-lb="bdel"]').disabled) }));
+  chk('Eine Marke lässt sich mit ihren Einträgen löschen; die letzte Marke bleibt', m3.n === 1 && m3.name === 'Meine Marke' && m3.logos === 0 && m3.del, m3);
+  await page.click('[data-lb="x"]');
+  await page.setInputFiles('#fileIn', datei); await page.waitForSelector('.modal-card.lib #lbBrand'); await sleep(300);
+  const m4 = await ev(() => ({ n: HT.brands.length, name: HT.brand.name, acc: HT.brand.accentKey, mine: HT.mine().map(i => i.kind + ':' + i.name).sort().join(), sel: document.querySelector('#lbBrand').selectedOptions[0].textContent }));
+  chk('Über „Öffnen“ kommt die Marke im Ganzen zurück und ist gleich gewählt', m4.n === 2 && m4.name === 'Katrin Fey' && m4.acc === 'blau' && m4.mine === 'graphic:Fey-Logo,graphic:Logo' && m4.sel === 'Katrin Fey', m4);
+  await page.setInputFiles('#fileIn', datei); await sleep(400);
+  chk('Dieselbe Datei ein zweites Mal einzulesen verdoppelt nichts', await ev(() => HT.brands.length === 2 && HT.mine().length === 2));
+  // Einträge aus 1.1.0 tragen noch keine Marke; die gewählte Marke übersteht den Neustart
+  await ev(async () => { const it = HT.lib.find(i => i.kind === 'overlay'); delete it.brand; await HT.Store.set('lib:' + it.id, it); });
+  await page.reload(); await page.waitForFunction(() => window.HT && HT.brand && !document.querySelector('#home').classList.contains('hidden'));
+  const m5 = await ev(() => ({ name: HT.brand.name, ov: HT.lib.find(i => i.kind === 'overlay').brand === HT.brand.id, n: HT.brands.length }));
+  chk('Nach einem Neustart ist dieselbe Marke gewählt; ein Eintrag ohne Marke (aus 1.1.0) kommt in die gewählte', m5.name === 'Katrin Fey' && m5.ov && m5.n === 2, m5);
   await browser.close();
 
   // ═════════ Handy-Ansicht ═════════
@@ -157,8 +202,8 @@ try {
   await ev(async src => { await HT.libAddImage('overlay', eval(src), { name: 'Banner' }); }, BANNER);
   await page.click('#homeNew'); await page.waitForSelector('#ndGrid canvas'); await page.click('#ndFmt [data-f="9:16"]'); await page.click('#ndGrid [data-t="rechts"]'); await page.waitForFunction(() => HT.doc); await sleep(250);
   await page.click('#addBar [data-add="lib"]'); await page.click('[data-lk="overlay"]'); await sleep(150);
-  const m1 = await ev(() => { const c = document.querySelector('.modal-card.lib').getBoundingClientRect(), k = document.querySelector('.lib-card').getBoundingClientRect(), g = document.querySelector('.lib-card .go').getBoundingClientRect(); return { w: c.width, bottom: c.bottom, inW: k.right <= 390 && k.left >= 0, go: g.height >= 24, over: document.documentElement.scrollWidth <= 390 }; });
-  chk('Am Handy passt die Ablage ins Fenster; die Karte ist ganz zu sehen', m1.w <= 390 && m1.bottom <= 781 && m1.inW && m1.go && m1.over, m1);
+  const hy = await ev(() => { const c = document.querySelector('.modal-card.lib').getBoundingClientRect(), k = document.querySelector('.lib-card').getBoundingClientRect(), g = document.querySelector('.lib-card .go').getBoundingClientRect(); return { tabs: [...document.querySelectorAll('.modal-card.lib [data-lk]')].every(b => b.scrollWidth <= b.clientWidth + 1), w: c.width, bottom: c.bottom, inW: k.right <= 390 && k.left >= 0, go: g.height >= 24, over: document.documentElement.scrollWidth <= 390 }; });
+  chk('Am Handy passen die Markenunterlagen ins Fenster; Karte und Reiter sind ganz zu sehen', hy.tabs && hy.w <= 390 && hy.bottom <= 781 && hy.inW && hy.go && hy.over, hy);
   chk('Auch am Handy ist die Auflage beim neuen Hochformat dabei', (await top()).last);
 } catch (e) { chk('Der Lauf endet ohne Abbruch', false, String(e && e.stack || e)); }
 finally { await browser.close().catch(() => {}); ende(logs); }

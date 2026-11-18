@@ -24,11 +24,13 @@ HoneyThumb läuft eigenständig (Windows, Android, Browser). Seine Vorlagen sind
 - **Ebenen:** Liste von vorn nach hinten, ausblenden, sperren, nach vorn und nach hinten.
 - **Akzentfarbe:** Rot, Grün, Petrol, Blau, Violett, Magenta, Orange, Ocker – tauscht die Farbe an allen Stellen.
 - **Export:** JPG (für YouTube unter 2 MB gehalten) oder PNG; 16:9 in 1280 × 720 und 1920 × 1080, Hochformate in 1080 Breite. Dazu `.honeythumb` zum Weiterbearbeiten auf einem anderen Gerät.
-- **Ablage – fest hinterlegte Bilder** (gilt für alle Titelbilder, Knopf „▤ Ablage“ in der Übersicht und im Editor):
-  - **Personen:** Menschen, die regelmäßig auf Titelbildern stehen, je Person ein oder mehrere Bilder. Ein Tipp setzt die Person ins freie Feld der Vorlage oder als eigene Ebene dazu. Bilder mit durchsichtigem Hintergrund bleiben, wie sie sind; alle anderen stellt HoneyThumb frei. Eine Person im Titelbild lässt sich mit „In der Ablage hinterlegen“ sichern.
+- **Markenunterlagen – fest hinterlegte Bilder je Marke** (Knopf „▤ Markenunterlagen“ in der Übersicht und im Editor). Eine Marke ist etwa der eigene Kanal oder eine Abgeordnete; es gilt immer die gewählte Marke. Sie trägt einen Namen, die Akzentfarbe neuer Titelbilder und vier Arten von Einträgen:
+  - **Personen:** Menschen, die regelmäßig auf Titelbildern stehen, je Person ein oder mehrere Bilder. Ein Tipp setzt die Person ins freie Feld der Vorlage oder als eigene Ebene dazu. Bilder mit durchsichtigem Hintergrund bleiben, wie sie sind; alle anderen stellt HoneyThumb frei.
   - **Auflagen:** Bilder, die immer ganz oben liegen (etwa ein Banner am unteren Rand), je Format wählbar. Mit „Immer dabei“ bekommt jedes neue Titelbild in diesen Formaten die Auflage von selbst. Die Vorlagen ordnen Texte und Bilder in der freien Fläche an, damit nichts unter der Auflage verschwindet.
   - **Grafiken:** Logos, Wasserzeichen und andere wiederkehrende Bilder.
-  - „Ablage sichern“ schreibt alle Einträge in eine Datei (`HoneyThumb-Ablage.json`), „Ablage laden“ oder „Öffnen“ liest sie auf einem anderen Gerät ein. Die Ablage liegt je Gerät getrennt.
+  - **Hintergründe:** Bilder, die immer wieder als Hintergrund dienen.
+  - Person, Bild oder Hintergrund eines Titelbilds lassen sich mit „Hinterlegen“ direkt in die gewählte Marke aufnehmen; Einträge lassen sich in eine andere Marke legen.
+  - **Auf ein anderes Gerät:** „Sichern“ schreibt die Marke im Ganzen in eine Datei (`Markenunterlagen-Name.json`: Name, Farbe, alle Einträge). „Laden“ oder „Öffnen“ liest sie ein; die Marke ist danach gewählt, schon vorhandene Einträge werden ersetzt. Die Unterlagen liegen je Gerät getrennt.
 - **Bilder holen:** Datei wählen, aus der Zwischenablage einfügen oder ins Fenster ziehen. Ein geöffnetes Foto wird in der gewählten Vorlage gleich freigestellt.
 
 ## Auf dem Handy
@@ -68,10 +70,10 @@ JSON, UTF-8. Maße in Entwurfspixeln des Formats (16:9 = 1600 × 900, 9:16 = 900
 - `web/` – Oberfläche: `thumb-engine.js` (Datenmodell, Zeichnen, Vorlagen), `thumb-cut.js` (Person freistellen), `thumb-icons.js` (Piktogramme), `thumb-app.js` (Editor), `thumb.css`
 - Rechenkern: `HoneyThumb.fromTemplate(vorlage, format, inhalt)` baut ein Titelbild, `HoneyThumb.render(titelbild, breite)` zeichnet es, `HoneyThumb.retemplate(titelbild, vorlage, format)` wechselt Vorlage oder Format, `HoneyThumb.recolor(titelbild, farbe)` tauscht die Akzentfarbe
 - Auflagen: `HoneyThumb.overlayLayer(format, bild, {band, ar, fmts, …})`, `bandOf(bild)` misst die deckenden Streifen, `topInset(ebenen, format)` die verdeckte Fläche; `fromTemplate` baut die Vorlage in die freie Fläche (`base.extra` trägt die Auflagen), `pinTop` hält Auflagen oben
-- Ablage: Einträge unter `lib:ID` in der Ablage des Geräts (`thumb-app.js`, Abschnitt „Ablage“)
+- Markenunterlagen (`thumb-app.js`): im Speicher des Geräts `brand:ID` je Marke, `lib:ID` je Eintrag (mit `brand`), `set:brand` die gewählte Marke; Datei `{app: "honeythumb-marke", brand, items}`
 - Freistellen: `HoneyThumbCut.person(bild)` liefert die Maske; `HoneyThumbCut.setSegmenter(fn)` setzt eine eigene Erkennung ein (HoneyCut, Prüfläufe)
 - `fonts/` – Schriften (dieselben wie in HoneyCut und HoneyDeck, Lizenzen in `fonts/LIZENZ.md`)
 - `build.py ZIEL` – stellt Oberfläche und Schriften zusammen (Web, Android, Windows)
 - `android/` – Android-App (WebView, Paket `de.honeybalecta.honeythumb`), `desktop/` – Windows-Programm (pywebview) und Installer
 - Builds: `.github/workflows/build.yml` (Android + Windows, Releases `android-v…` und `v…`), `pages.yml` (Web)
-- Prüflauf: `python3 build.py /tmp/ht/site`, den Ordner auf Port 8801 ausliefern (`python3 -m http.server 8801`), dann `node tests/p_thumb.mjs` und `node tests/p_ablage.mjs`. Playwright wird aus dem Ordner in `HT_PW` geladen. Der Lauf nutzt ein künstliches Foto und eine eigene Erkennung; die echte Erkennung aus dem Netz prüft er nicht.
+- Prüflauf: `python3 build.py /tmp/ht/site`, den Ordner auf Port 8801 ausliefern (`python3 -m http.server 8801`), dann `node tests/p_thumb.mjs` und `node tests/p_marke.mjs`. Playwright wird aus dem Ordner in `HT_PW` geladen. Der Lauf nutzt ein künstliches Foto und eine eigene Erkennung; die echte Erkennung aus dem Netz prüft er nicht.

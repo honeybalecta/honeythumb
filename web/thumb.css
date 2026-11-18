@@ -152,6 +152,7 @@ input[type=range]{width:100%;accent-color:var(--acc);padding:0;border:0;backgrou
 .lib-card .acts{position:absolute;top:5px;right:5px;display:flex;gap:4px}
 .lib-card .acts button{background:#000c;border:0;border-radius:6px;color:var(--fg);padding:4px 7px;cursor:pointer;font-size:12px}
 .modal-card.lib .tabs{margin:-4px 0}
+.brand-row select{max-width:none;flex:1;min-width:0} .brand-row .sel-lbl{min-width:0}
 .acc-pop{display:flex;gap:8px;flex-wrap:wrap}
 .acc-pop button{width:38px;height:38px;border-radius:50%;border:3px solid var(--line);cursor:pointer}
 .acc-pop button.on{border-color:var(--fg)}
@@ -188,6 +189,7 @@ input[type=range]{width:100%;accent-color:var(--acc);padding:0;border:0;backgrou
   #toast{bottom:calc(70px + env(safe-area-inset-bottom))}
   .home-body{padding:12px} .thumb-grid{grid-template-columns:repeat(2,1fr);gap:10px}
   .lib-grid{grid-template-columns:repeat(2,1fr)} .lib-card .pic{height:110px}
+  .modal-card.lib .tabs button{font-size:12.5px;padding:10px 2px} .brand-row{flex-wrap:wrap}
 }
 @media (max-width:860px) and (orientation:landscape){
   .ed-body{flex-direction:row;flex-wrap:nowrap} .stage-pane{height:auto;flex:1.2} .pane{border-top:0!important;border-left:1px solid var(--line)!important;flex:1}
