@@ -46,9 +46,10 @@
   const target = () => cur() || bgL();
   const snap = () => JSON.stringify({layers: doc.layers, format: doc.format, tpl: doc.tpl, accent: doc.accent, accentKey: doc.accentKey, keep: doc.keep || {}});
   // Stand festhalten (für Rückgängig) und speichern; ohne Änderung an den Ebenen entsteht kein neuer Schritt
-  function commit(){ doc.updated = Date.now(); const s = snap(); if (s !== hist[hi]){ hist = hist.slice(0, hi + 1); hist.push(s); if (hist.length > 80) hist.shift(); hi = hist.length - 1; } after(); }
+  const pool = {};   // alle Bilder dieser Sitzung – damit Rückgängig auch Ebenen zurückholt, deren Bild inzwischen aufgeräumt wurde
+  function commit(){ H.pinTop(doc); Object.assign(pool, doc.assets); doc.updated = Date.now(); const s = snap(); if (s !== hist[hi]){ hist = hist.slice(0, hi + 1); hist.push(s); if (hist.length > 80) hist.shift(); hi = hist.length - 1; } after(); }
   function after(){ $('#undoBtn').disabled = hi <= 0; $('#redoBtn').disabled = hi >= hist.length - 1; $('#saved').textContent = '…'; clearTimeout(saveT); saveT = setTimeout(saveNow, 700); draw(); layerList(); clearTimeout(tplT); tplT = setTimeout(tplGrid, 500); }
-  function travel(d){ if (hi + d < 0 || hi + d >= hist.length) return; hi += d; Object.assign(doc, JSON.parse(hist[hi])); if (!cur()) selId = null; fillBar(); fitStage(); after(); inspector(); }
+  function travel(d){ if (hi + d < 0 || hi + d >= hist.length) return; hi += d; Object.assign(doc, JSON.parse(hist[hi])); doc.assets = {...pool, ...doc.assets}; if (!cur()) selId = null; fillBar(); fitStage(); after(); inspector(); }
   async function saveNow(){
     if (!doc) return; clearTimeout(saveT);
     try { const d = H.prune(H.clone(doc)), pv = H.render(doc, 480).toDataURL('image/jpeg', 0.8);
@@ -75,9 +76,140 @@
   $('#thumbList').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.classList.contains('thumb-card')) e.target.click(); });
 
   // ───────── Dialoge ─────────
-  function modal(html, cls = ''){ const c = $('#modalCard'); c.className = 'modal-card ' + cls; c.innerHTML = html; $('#modal').classList.remove('hidden'); return c; }
+  function modal(html, cls = ''){ const old = $('#modalCard'), c = old.cloneNode(false); old.replaceWith(c); c.className = 'modal-card ' + cls; c.innerHTML = html; $('#modal').classList.remove('hidden'); return c; }
   function closeModal(){ $('#modal').classList.add('hidden'); $('#modalCard').innerHTML = ''; }
   $('#modal').addEventListener('pointerdown', e => { if (e.target.id === 'modal') closeModal(); });
+
+
+  // ───────── Ablage: fest hinterlegte Bilder für alle Titelbilder ─────────
+  // Personen (ein oder mehrere freigestellte Bilder), Auflagen (liegen immer ganz oben, je Format; auf Wunsch bei jedem neuen Titelbild dabei), Grafiken (Logos, Wasserzeichen).
+  // Jeder Eintrag liegt unter „lib:ID“ in der Ablage des Geräts; „Ablage sichern“ schreibt alle in eine Datei für ein anderes Gerät.
+  const KINDS = [
+    {k: 'person', n: 'Personen', one: 'Person', hint: 'Menschen, die regelmäßig auf deinen Titelbildern stehen. Je Person ein oder mehrere Bilder – ein Tipp setzt sie ins Titelbild.'},
+    {k: 'overlay', n: 'Auflagen', one: 'Auflage', hint: 'Bilder, die immer ganz oben liegen, etwa ein Banner am unteren Rand. Durchsichtige Stellen lassen das Titelbild durch; die Vorlagen ordnen alles in der freien Fläche an.'},
+    {k: 'graphic', n: 'Grafiken', one: 'Grafik', hint: 'Logos, Wasserzeichen, Knöpfe und andere Bilder, die du immer wieder brauchst.'},
+  ];
+  let lib = [], libP = null;
+  const DATA = /^data:image\/(png|jpeg|webp|gif);base64,/;
+  const libSort = () => lib.sort((a, b) => String(a.name).localeCompare(String(b.name), 'de'));
+  // Beim Start: Einträge lesen und die Auflagen dekodieren (für die Vorschauen neuer Titelbilder)
+  function libReady(){ return libP ||= (async () => { for (const k of await Store.keys('lib:')){ try { const it = await Store.get(k); if (it && it.id && KINDS.some(x => x.k === it.kind)) lib.push(it); } catch(_){} }
+    libSort(); await Promise.all(lib.filter(i => i.kind === 'overlay').map(i => H.decode(i.img).catch(() => null))); })().catch(() => null); }
+  async function libSave(it){ it.updated = Date.now(); const i = lib.findIndex(x => x.id === it.id); if (i < 0) lib.push(it); else lib[i] = it; libSort(); await Store.set('lib:' + it.id, it); return it; }
+  async function libDel(id){ lib = lib.filter(x => x.id !== id); await Store.del('lib:' + id); }
+  // Kleines Vorschaubild (freigestellt, mit Transparenz)
+  async function thumbOf(url, maskUrl){ const im = await H.decode(url), mk = maskUrl ? await H.decode(maskUrl) : null, src = H.cutout(im, mk), w = src.naturalWidth || src.width, h = src.naturalHeight || src.height, k = Math.min(1, 220 / Math.max(w, h)), c = H.mkCanvas(w * k, h * k);
+    c.getContext('2d').drawImage(src, 0, 0, c.width, c.height); return c.toDataURL('image/png'); }
+  // Hat das Bild schon einen durchsichtigen Hintergrund?
+  function hasAlpha(im){ const c = H.mkCanvas(48, 48), x = c.getContext('2d', {willReadFrequently: true}); x.drawImage(im, 0, 0, 48, 48); const d = x.getImageData(0, 0, 48, 48).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] < 128) n++; return n > 48 * 48 * 0.03; }
+  const nearFmt = ar => H.FORMATS.reduce((a, f) => Math.abs(Math.log(f.w / f.h / ar)) < Math.abs(Math.log(a.w / a.h / ar)) ? f : a).k;
+  // Bild in die Ablage aufnehmen. Person: freigestellte Bilder bleiben, wie sie sind; alle anderen werden freigestellt.
+  async function libAddImage(kind, url, o = {}){
+    const im = await H.decode(url), ar = im.naturalWidth / im.naturalHeight, name = String(o.name || pickImage.last || KINDS.find(x => x.k === kind).one).slice(0, 60);
+    if (kind === 'person'){ let pic;
+      if (o.pic) pic = {id: H.uid(), ...o.pic};
+      else if (hasAlpha(im)) pic = {id: H.uid(), img: url, mask: null, src: null};
+      else { busy('Stelle die Person frei …'); try { const r = await CUT.person(im, {msg: busy}), c = CUT.crop(im, r.mask, r.box); pic = {id: H.uid(), img: c.img, mask: c.mask, src: url}; } finally { busy(''); } }
+      pic.thumb = await thumbOf(pic.img, pic.mask);
+      const it = (o.id && lib.find(x => x.id === o.id)) || {id: H.uid(), kind, name, pics: []}; it.pics.push(pic); return libSave(it); }
+    if (kind === 'overlay'){ const band = H.bandOf(im); return libSave({id: H.uid(), kind, name, img: url, ar, band, formats: [nearFmt(ar)], auto: true, thumb: await thumbOf(url)}); }
+    return libSave({id: H.uid(), kind, name, img: url, ar, thumb: await thumbOf(url)});
+  }
+  // Auflagen, die bei neuen Titelbildern dieses Formats immer dabei sind (ohne die, die das Titelbild schon trägt)
+  function autoTops(fmt, have){ const holder = {assets: {}}, extra = [];
+    for (const it of lib){ if (it.kind !== 'overlay' || !it.auto || !(it.formats || []).includes(fmt) || !H.imgOf({assets: {x: it.img}}, 'x')) continue; if (have && have.layers.some(L => L.lib === it.id)) continue;
+      extra.push(H.overlayLayer(fmt, H.addAsset(holder, it.img), {lib: it.id, name: it.name, fmts: it.formats.slice(), band: it.band, ar: it.ar})); }
+    return {assets: holder.assets, extra}; }
+  // Einsetzen ins offene Titelbild
+  async function putPerson(L, pic){ L.img = H.addAsset(doc, pic.img); if (pic.mask) L.mask = H.addAsset(doc, pic.mask); else delete L.mask; if (pic.src) L.src = H.addAsset(doc, pic.src); else delete L.src; delete L.auto; await H.load(doc); return L; }
+  async function usePerson(pic){
+    let L = doc.layers.find(x => x.type === 'img' && x.slot === 'person' && (!x.img || x.auto));
+    if (L) await putPerson(L, pic);
+    else { L = await putPerson(H.newLayer(doc, 'img', {pos: {x: 0.5, y: 1}, outline: {w: 9, c: H.lum(H.bgColor(doc)) < 0.5 ? PAL.cream : PAL.ink}}), pic); const im = H.imgOf(doc, L.img); standPerson(L, im.naturalWidth / im.naturalHeight); doc.layers.push(L); }
+    commit(); select(L.id); setMob('insp'); return L;
+  }
+  async function useOverlay(it){
+    if (doc.layers.some(L => L.lib === it.id)) return void toast(`„${it.name}“ liegt schon auf diesem Titelbild.`);
+    const L = H.overlayLayer(doc.format, H.addAsset(doc, it.img), {lib: it.id, name: it.name, fmts: [...new Set([...(it.formats || []), doc.format])], band: it.band, ar: it.ar}); await H.load(doc); doc.layers.push(L);
+    const ins = H.topInset([L], F()); if (doc.tpl && ins.t + ins.b > 0){ doc = H.retemplate(doc, doc.tpl); toast(`„${it.name}“ liegt obenauf. Die Vorlage ist neu angeordnet, damit nichts darunter verschwindet.`); } else toast(`„${it.name}“ liegt obenauf.`);
+    selId = null; commit(); inspector(); return L;
+  }
+  async function useGraphic(it){ const id = H.addAsset(doc, it.img); await H.load(doc); const im = H.imgOf(doc, id); return addLayer(H.newLayer(doc, 'img', {img: id, name: it.name, ratio: im.naturalWidth / im.naturalHeight})); }
+
+  // Dialog der Ablage. o.kind: Reiter zu Beginn; o.pick(Bild der Person | Eintrag): statt ins Titelbild einzusetzen
+  function libDialog(o = {}){
+    let kind = o.kind || 'person', open = null;
+    const c = modal('', 'lib'), can = !!doc, K = () => KINDS.find(x => x.k === kind), items = () => lib.filter(i => i.kind === kind), item = id => lib.find(i => i.id === id);
+    const card = (attr, thumb, body, acts) => `<div class="lib-card" ${attr}><div class="pic"><img src="${esc(thumb || '')}" alt=""></div>${body}${acts ? `<div class="acts">${acts}</div>` : ''}</div>`;
+    const paint = () => {
+      const p = open && item(open); let h = `<h2>Ablage</h2>`;
+      if (p){ h += `<div class="row"><button class="btn ghost" data-lb="back">‹ Personen</button><input id="lbName" value="${esc(p.name)}" maxlength="60" aria-label="Name der Person" spellcheck="false"></div>
+          <div class="lib-grid">${p.pics.map(q => card(`data-lp="${q.id}"${can ? ' tabindex="0" title="Ins Titelbild einsetzen"' : ''}`, q.thumb, can ? `<span class="go">Einsetzen</span>` : '', `<button data-lb="delpic" title="Bild löschen" aria-label="Bild löschen">🗑</button>`)).join('') || '<p class="hint">Noch kein Bild. Füge eines hinzu.</p>'}</div>
+          <p class="hint">Bilder mit durchsichtigem Hintergrund bleiben, wie sie sind. Bei allen anderen stellt HoneyThumb die Person frei.</p>
+          <div class="modal-foot"><button class="btn ghost" data-lb="delitem">Person löschen</button><span class="grow"></span><button class="btn primary" data-lb="addpic">＋ Bild hinzufügen</button><button class="btn ghost" data-lb="x">Schließen</button></div>`; }
+      else { h += `<div class="tabs">${KINDS.map(x => `<button data-lk="${x.k}" class="${x.k === kind ? 'on' : ''}">${esc(x.n)}</button>`).join('')}</div><p class="hint">${esc(K().hint)}</p><div class="lib-grid">`;
+        for (const it of items()){
+          if (kind === 'person') h += card(`data-li="${it.id}" tabindex="0"`, it.pics[0] && it.pics[0].thumb, `<b>${esc(it.name)}</b><span class="muted small">${it.pics.length === 1 ? '1 Bild' : it.pics.length + ' Bilder'}</span>`, `<button data-lb="edit" title="Bilder und Name bearbeiten" aria-label="Bearbeiten">✎</button>`);
+          else h += card(`data-li="${it.id}"${can && kind === 'graphic' ? ' tabindex="0" title="Ins Titelbild einsetzen"' : ''}`, it.thumb, `<input class="nm" data-ln="${it.id}" value="${esc(it.name)}" maxlength="60" aria-label="Name" spellcheck="false">` +
+            (kind === 'overlay' ? `<div class="seg fm" title="Formate, für die diese Auflage gilt">${H.FORMATS.map(f => `<button data-lf="${f.k}" class="${(it.formats || []).includes(f.k) ? 'on' : ''}">${f.k}</button>`).join('')}</div><label class="chk small"><input type="checkbox" data-lauto${it.auto ? ' checked' : ''}> Immer dabei</label>` : '') +
+            (can ? `<span class="go" data-lb="use">Einsetzen</span>` : ''), `<button data-lb="delitem" title="Löschen" aria-label="Löschen">🗑</button>`); }
+        h += (items().length ? '' : `<p class="hint">Noch nichts hinterlegt.</p>`) + `</div>` + (kind === 'overlay' ? `<p class="hint">„Immer dabei“: Jedes neue Titelbild in den gewählten Formaten bekommt die Auflage von selbst.</p>` : '') +
+          `<div class="modal-foot"><button class="btn ghost small" data-lb="load" title="Ablage-Datei von einem anderen Gerät einlesen">Ablage laden</button><button class="btn ghost small" data-lb="save" title="Alle Einträge als Datei sichern – für ein anderes Gerät"${lib.length ? '' : ' disabled'}>Ablage sichern</button><span class="grow"></span><button class="btn primary" data-lb="add">＋ ${esc(K().one)}</button><button class="btn ghost" data-lb="x">Schließen</button></div>`; }
+      c.innerHTML = h;
+    };
+    const fail = e => { busy(''); toast((e && e.message) || 'Das hat nicht geklappt.'); };
+    const use = async (it, pic) => { closeModal(); try { if (o.pick) await o.pick(pic || it); else if (it.kind === 'person') await usePerson(pic); else if (it.kind === 'overlay') await useOverlay(it); else await useGraphic(it); } catch(e){ fail(e); } };
+    c.addEventListener('click', async e => {
+      const t = e.target, b = t.closest('[data-lb]'), a = b && b.dataset.lb, cd = t.closest('.lib-card'), it = cd && cd.dataset.li ? item(cd.dataset.li) : open ? item(open) : null;
+      try {
+        if (t.closest('[data-lk]')){ kind = t.closest('[data-lk]').dataset.lk; paint(); }
+        else if (a === 'x') closeModal();
+        else if (a === 'back'){ open = null; paint(); }
+        else if (a === 'save') libFile();
+        else if (a === 'load'){ closeModal(); $('#homeImport').click(); }
+        else if (a === 'add'){ if (kind === 'person'){ const n = await libSave({id: H.uid(), kind, name: 'Neue Person', pics: []}); open = n.id; paint(); const i = $('#lbName'); i.focus(); i.select(); }
+          else { const url = await pickImage(); if (!url) return; await libAddImage(kind, url); paint(); if (kind === 'overlay') toast('Hinterlegt. Die Auflage ist bei neuen Titelbildern im passenden Format immer dabei.'); } }
+        else if (a === 'addpic'){ const url = await pickImage(); if (!url) return; await libAddImage('person', url, {id: open}); paint(); }
+        else if (a === 'delpic'){ const p = item(open), q = cd.dataset.lp; if (confirm('Dieses Bild aus der Ablage löschen?')){ p.pics = p.pics.filter(x => x.id !== q); await libSave(p); paint(); } }
+        else if (a === 'delitem'){ if (it && confirm(`„${it.name}“ aus der Ablage löschen? Titelbilder, die es schon tragen, behalten es.`)){ await libDel(it.id); open = null; paint(); } }
+        else if (a === 'edit'){ open = it.id; paint(); }
+        else if (t.closest('[data-lf]')){ const f = t.closest('[data-lf]').dataset.lf; it.formats = (it.formats || []).includes(f) ? it.formats.filter(x => x !== f) : [...(it.formats || []), f]; await libSave(it); paint(); }
+        else if (t.closest('input,label')) return;
+        else if (cd && cd.dataset.lp){ if (can) await use(item(open), item(open).pics.find(q => q.id === cd.dataset.lp)); }
+        else if (cd && it){ if (it.kind === 'person'){ if (can && it.pics.length === 1) await use(it, it.pics[0]); else { open = it.id; paint(); } } else if (can && (a === 'use' || it.kind === 'graphic')) await use(it); }
+      } catch(err){ fail(err); }
+    });
+    c.addEventListener('change', async e => { const t = e.target;
+      if (t.id === 'lbName'){ const p = item(open); p.name = t.value.trim() || 'Person'; await libSave(p); }
+      else if (t.dataset.ln){ const it = item(t.dataset.ln); it.name = t.value.trim() || K().one; await libSave(it); }
+      else if ('lauto' in t.dataset){ const it = item(t.closest('.lib-card').dataset.li); it.auto = t.checked; await libSave(it); } });
+    c.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.classList.contains('lib-card')) e.target.click(); else if (e.key === 'Enter' && e.target.tagName === 'INPUT') e.target.blur(); });
+    libReady().then(paint);
+  }
+  // Bild einer Ebene in der Ablage hinterlegen: freigestellte Bilder bei einer Person, alle anderen als Grafik
+  function toLibDialog(L){
+    const person = L.slot === 'person' || !!L.mask, ps = lib.filter(i => i.kind === 'person'), u = id => doc.assets[id] || null;
+    const c = modal(`<h2>In der Ablage hinterlegen</h2>` + (person ? `<label class="f"><span>Neue Person</span><input id="tlName" placeholder="Name der Person" maxlength="60" spellcheck="false"></label>
+        ${ps.length ? `<div class="f"><span>Oder als weiteres Bild zu</span><div class="row wrap">${ps.map(p => `<button class="btn small" data-tp="${p.id}">${esc(p.name)}</button>`).join('')}</div></div>` : ''}`
+      : `<label class="f"><span>Name der Grafik</span><input id="tlName" value="${esc(L.name || '')}" placeholder="z. B. Logo" maxlength="60" spellcheck="false"></label>`) +
+      `<div class="modal-foot"><button class="btn ghost" id="tlX">Abbrechen</button><button class="btn primary" id="tlOk">Hinterlegen</button></div>`, 'narrow');
+    const done = async id => { const name = $('#tlName').value.trim(); if (!id && !name){ $('#tlName').focus(); return toast('Gib einen Namen ein.'); } closeModal();
+      try { const it = person ? await libAddImage('person', u(L.img), {id, name, pic: {img: u(L.img), mask: u(L.mask), src: u(L.src)}}) : await libAddImage('graphic', u(L.img), {name}); toast(`In der Ablage hinterlegt: ${it.name}`); inspector(); } catch(e){ toast(e.message || 'Das hat nicht geklappt.'); } };
+    c.addEventListener('click', e => { const p = e.target.closest('[data-tp]'); if (p) done(p.dataset.tp); else if (e.target.id === 'tlOk') done(null); else if (e.target.id === 'tlX') closeModal(); });
+    c.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'tlName') done(null); });
+    if (!compact()) $('#tlName').focus();
+  }
+  // Ablage als Datei: sichern und einlesen (Einträge mit derselben Kennung werden ersetzt)
+  async function libFile(){ await saveBlob(new Blob([JSON.stringify({app: 'honeythumb-ablage', v: 1, items: lib})], {type: 'application/json'}), 'HoneyThumb-Ablage.json'); }
+  async function libImport(raw){
+    await libReady(); const ok = u => typeof u === 'string' && DATA.test(u), opt = u => u == null || ok(u), str = (v, d) => String(v || d).slice(0, 60); let n = 0;
+    for (const r of Array.isArray(raw.items) ? raw.items.slice(0, 500) : []){ if (!r || typeof r.id !== 'string' || !/^[\w-]{1,40}$/.test(r.id)) continue; let it = null;
+      if (r.kind === 'person' && Array.isArray(r.pics)) it = {id: r.id, kind: 'person', name: str(r.name, 'Person'), pics: r.pics.filter(q => q && ok(q.img) && opt(q.mask) && opt(q.src) && opt(q.thumb)).slice(0, 60).map(q => ({id: /^[\w-]{1,40}$/.test(q.id || '') ? q.id : H.uid(), img: q.img, mask: q.mask || null, src: q.src || null, thumb: q.thumb || q.img}))};
+      else if ((r.kind === 'overlay' || r.kind === 'graphic') && ok(r.img)){ const im = await H.decode(r.img).catch(() => null); if (!im) continue; it = {id: r.id, kind: r.kind, name: str(r.name, r.kind === 'overlay' ? 'Auflage' : 'Grafik'), img: r.img, ar: im.naturalWidth / im.naturalHeight, thumb: ok(r.thumb) ? r.thumb : await thumbOf(r.img)};
+        if (r.kind === 'overlay'){ it.band = H.bandOf(im); it.formats = (Array.isArray(r.formats) ? r.formats : []).filter(f => H.FORMATS.some(x => x.k === f)); it.auto = !!r.auto; } }
+      if (it){ await libSave(it); n++; } }
+    toast(n ? `Ablage eingelesen: ${n} ${n === 1 ? 'Eintrag' : 'Einträge'}.` : 'In dieser Datei stehen keine Einträge für die Ablage.'); if (n) libDialog();
+  }
 
   // Neues Titelbild: Format und Vorlage wählen. pre: {url} – ein schon gewähltes Bild
   function newDialog(pre){
@@ -88,18 +220,20 @@
       <div class="modal-foot"><button class="btn ghost" id="ndCancel">Abbrechen</button><button class="btn" id="ndBlank">Leer beginnen</button></div>`);
     const paint = () => { $$('#ndFmt button').forEach(b => b.classList.toggle('on', b.dataset.f === fmt));
       const g = $('#ndGrid'); g.innerHTML = '';
-      for (const t of H.TEMPLATES){ const b = document.createElement('button'); b.dataset.t = t.id; const d = H.fromTemplate(t.id, fmt, {}); b.append(H.render(d, 340, {edit: true})); const s = document.createElement('span'); s.textContent = t.n; b.append(s); g.append(b); } };
-    const start = async tpl => { closeModal(); let d = tpl ? H.fromTemplate(tpl, fmt, {}) : H.blank(fmt);
-      if (pre && pre.url){ const id = H.addAsset(d, pre.url); if (tpl) d = H.fromTemplate(tpl, fmt, {person: {img: id, mask: null}}, {id: d.id, assets: d.assets}); else { await H.load(d); const im = H.imgOf(d, id); d.layers.push(H.newLayer(d, 'img', {img: id, ratio: im.naturalWidth / im.naturalHeight})); } }
-      await openDoc(d, true);
+      for (const t of H.TEMPLATES){ const b = document.createElement('button'); b.dataset.t = t.id; const d = H.fromTemplate(t.id, fmt, {}, autoTops(fmt)); b.append(H.render(d, 340, {edit: true})); const s = document.createElement('span'); s.textContent = t.n; b.append(s); g.append(b); } };
+    const start = async tpl => { closeModal(); const ax = autoTops(fmt); let d = tpl ? H.fromTemplate(tpl, fmt, {}, ax) : H.blank(fmt);
+      if (!tpl){ Object.assign(d.assets, ax.assets); d.layers.push(...ax.extra); }
+      if (pre && pre.url){ const id = H.addAsset(d, pre.url); if (tpl) d = H.fromTemplate(tpl, fmt, {person: {img: id, mask: null}}, {id: d.id, assets: d.assets, extra: ax.extra}); else { await H.load(d); const im = H.imgOf(d, id); d.layers.push(H.newLayer(d, 'img', {img: id, ratio: im.naturalWidth / im.naturalHeight})); } }
+      await openDoc(d, true); if (ax.extra.length) toast(`Auflage „${ax.extra.map(L => L.name).join('“, „')}“ ist dabei – sie liegt immer ganz oben.`);
       const p = doc.layers.find(L => L.type === 'img' && L.slot === 'person' && L.img && !L.mask); if (p){ select(p.id); await cutLayer(p, true); } };
-    H.fonts().then(paint);
+    H.fonts().then(libReady).then(paint);
     c.addEventListener('click', e => { const f = e.target.closest('[data-f]'), t = e.target.closest('[data-t]'); if (f){ fmt = f.dataset.f; paint(); } else if (t) start(t.dataset.t); else if (e.target.id === 'ndBlank') start(null); else if (e.target.id === 'ndCancel') closeModal(); });
   }
 
   // ───────── Editor öffnen ─────────
   async function openDoc(d, fresh){
     busy('Öffne …'); try { doc = d; await H.load(doc); } finally { busy(''); }
+    for (const k of Object.keys(pool)) delete pool[k]; Object.assign(pool, doc.assets);
     selId = null; hist = [snap()]; hi = 0; $('#home').classList.add('hidden'); $('#ed').classList.remove('hidden');
     fillBar(); setLeft('tpl'); setMob('insp'); fitStage(); inspector(); layerList(); tplGrid(); $('#undoBtn').disabled = $('#redoBtn').disabled = true; $('#saved').textContent = '';
     if (fresh) saveNow();
@@ -109,7 +243,9 @@
     document.documentElement.style.setProperty('--acc', H.accent(doc.accentKey).dark);
   }
   $('#edName').addEventListener('change', e => { doc.name = e.target.value.trim() || 'Titelbild'; e.target.value = doc.name; commit(); });
-  function setFormat(k){ if (k === doc.format) return; const had = !!doc.tpl; doc = H.retemplate(doc, null, k); selId = null; fillBar(); fitStage(); commit(); inspector(); if (had) toast('Die Vorlage ist für das neue Format neu angeordnet.'); }
+  function setFormat(k){ if (k === doc.format) return; const had = !!doc.tpl; doc = H.retemplate(doc, null, k);
+    const ax = autoTops(k, doc); if (ax.extra.length){ Object.assign(doc.assets, ax.assets); doc.layers.push(...ax.extra); if (doc.tpl) doc = H.retemplate(doc, doc.tpl); }
+    selId = null; fillBar(); fitStage(); commit(); inspector(); if (had) toast('Die Vorlage ist für das neue Format neu angeordnet.'); }
   $('#edFmt').addEventListener('change', e => setFormat(e.target.value));
   $('#edBack').onclick = async () => { await saveNow(); showHome(); };
   $('#undoBtn').onclick = () => travel(-1); $('#redoBtn').onclick = () => travel(1);
@@ -178,7 +314,7 @@
     const c = H.mkCanvas(w * k, h * k); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); return alpha ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.92);
   }
   function pickImage(){ return new Promise(res => { imgRes = res; const i = $('#imgIn'); i.value = ''; i.click(); }); }
-  $('#imgIn').addEventListener('change', async e => { const f = e.target.files[0], res = imgRes; imgRes = null; if (!f || !res) return; try { busy('Lade Bild …'); res(await normalize(f)); } catch(err){ toast(err.message); res(null); } finally { busy(''); } });
+  $('#imgIn').addEventListener('change', async e => { const f = e.target.files[0], res = imgRes; imgRes = null; if (!f || !res) return; pickImage.last = f.name.replace(/\.[a-z0-9]+$/i, ''); try { busy('Lade Bild …'); res(await normalize(f)); } catch(err){ toast(err.message); res(null); } finally { busy(''); } });
   async function setImage(L, url){ const id = H.addAsset(doc, url); if (L.type === 'bg'){ L.fill.kind = 'img'; L.fill.img = id; } else { L.img = id; delete L.mask; delete L.src; } delete L.auto; await H.load(doc); }
   // Person in der Ebene freistellen. neu: Bild auf die Person zuschneiden (für frisch eingesetzte Bilder)
   async function cutLayer(L, crop){
@@ -193,6 +329,8 @@
   }
 
   // ───────── Hinzufügen ─────────
+  // Eine Person steht unten in der freien Fläche (über einer Auflage am unteren Rand)
+  function standPerson(L, ratio){ const f = F(), ins = H.topInset(doc.layers, f), fh = f.h * (1 - ins.t - ins.b); L.h = fh * 0.92; L.w = L.h * ratio; if (L.w > f.w * 1.1){ L.w = f.w * 1.1; L.h = L.w / ratio; } L.x = f.w / 2 - L.w / 2; L.y = f.h * ins.t + fh * 1.02 - L.h; return L; }
   function addLayer(L){ doc.layers.push(L); commit(); select(L.id); setMob('insp'); return L; }
   $('#addBar').addEventListener('click', async e => {
     const b = e.target.closest('[data-add]'); if (!b) return; const k = b.dataset.add;
@@ -202,8 +340,9 @@
     else if (k === 'img'){ const url = await pickImage(); if (!url) return; const id = H.addAsset(doc, url); await H.load(doc); const im = H.imgOf(doc, id); addLayer(H.newLayer(doc, 'img', {img: id, ratio: im.naturalWidth / im.naturalHeight})); }
     else if (k === 'person'){ const url = await pickImage(); if (!url) return; const id = H.addAsset(doc, url); await H.load(doc); const im = H.imgOf(doc, id);
       let L = doc.layers.find(x => x.type === 'img' && x.slot === 'person' && !x.img);
-      if (L){ L.img = id; select(L.id); } else { const f = F(); L = H.newLayer(doc, 'img', {img: id, ratio: im.naturalWidth / im.naturalHeight, pos: {x: 0.5, y: 1}, outline: {w: 9, c: H.lum(H.bgColor(doc)) < 0.5 ? PAL.cream : PAL.ink}}); L.h = f.h * 0.92; L.w = L.h * im.naturalWidth / im.naturalHeight; L.x = f.w / 2 - L.w / 2; L.y = f.h * 0.1; doc.layers.push(L); select(L.id); }
+      if (L){ L.img = id; select(L.id); } else { const f = F(); L = H.newLayer(doc, 'img', {img: id, ratio: im.naturalWidth / im.naturalHeight, pos: {x: 0.5, y: 1}, outline: {w: 9, c: H.lum(H.bgColor(doc)) < 0.5 ? PAL.cream : PAL.ink}}); standPerson(L, im.naturalWidth / im.naturalHeight); doc.layers.push(L); select(L.id); }
       setMob('insp'); await cutLayer(L, true); }
+    else if (k === 'lib') libDialog();
   });
   function iconDialog(done){
     const c = modal(`<h2>Symbol</h2><input type="search" id="icQ" placeholder="Symbol suchen – z. B. Streik, Miete, Polizei"><div class="ic-grid" id="icG"></div><div class="modal-foot"><button class="btn ghost" id="icX">Abbrechen</button></div>`);
@@ -224,7 +363,7 @@
   const fTog = (L, k, label, defObj) => `<label class="chk"><input type="checkbox" data-tog="${k}" data-def='${esc(JSON.stringify(defObj))}'${gp(L, k) ? ' checked' : ''}> ${label}</label>`;
   const btn = (a, label, cls = '') => `<button class="btn small ${cls}" data-act="${a}">${label}</button>`;
   const grp = (title, html) => `<div class="grp"><span>${title}</span>${html}</div>`;
-  const layerName = L => L.type === 'bg' ? 'Hintergrund' : L.type === 'text' ? (String(L.text || '').replace(/\s+/g, ' ').slice(0, 26) || 'Text') : L.type === 'img' ? (L.slot === 'person' || L.mask ? 'Person' : 'Bild') : L.type === 'shape' ? (H.SHAPES.find(s => s.k === L.shape) || {n: 'Form'}).n : (IC.LIB.get(L.icon) || {label: 'Symbol'}).label;
+  const layerName = L => L.type === 'bg' ? 'Hintergrund' : L.type === 'text' ? (String(L.text || '').replace(/\s+/g, ' ').slice(0, 26) || 'Text') : L.type === 'img' ? (L.name || (L.top ? 'Auflage' : L.slot === 'person' || L.mask ? 'Person' : 'Bild')) : L.type === 'shape' ? (H.SHAPES.find(s => s.k === L.shape) || {n: 'Form'}).n : (IC.LIB.get(L.icon) || {label: 'Symbol'}).label;
   function inspector(){
     if (!doc) return; const L = target(), el = $('#insp'), f = F(), u = Math.min(f.w, f.h); let h = '';
     $('#inspTitle').textContent = layerName(L);
@@ -250,12 +389,16 @@
         h += grp('Balken hinter dem Text', fTog(L, 'box', 'Balken', {c: H.accent(doc.accentKey).light, pad: 0.2}) + (L.box ? fColor(L, 'box.c', 'Farbe') + fSeg(L, 'box.mode', '', [['line', 'Je Zeile'], ['block', 'Ein Block']], 'line') + fRange(L, 'box.pad', 'Rand', 0, 0.6, 0.01, 0.2) : ''));
         h += grp('Kontur und Schatten', fTog(L, 'stroke', 'Kontur', {w: 6, c: PAL.ink}) + (L.stroke ? fRange(L, 'stroke.w', 'Stärke', 1, 30, 0.5, 6) + fColor(L, 'stroke.c', 'Farbe') : '') + fTog(L, 'shadow', 'Schatten', {b: 18, x: 0, y: 8, c: 'rgba(0,0,0,0.5)'}));
       }
+      if (L.type === 'img' && L.top){
+        h += `<p class="hint">Auflage aus der Ablage. Sie liegt immer ganz oben; die Vorlage ordnet Texte und Bilder in der freien Fläche an.</p>` + fRange(L, 'op', 'Deckkraft', 0, 1, 0.01, 1) + `<div class="row wrap">${btn('lock', L.lock ? 'Entsperren (verschieben)' : 'Sperren')}${btn('del', 'Aus diesem Titelbild nehmen')}${btn('lib-overlay', 'Ablage öffnen')}</div>`;
+        el.innerHTML = h; return; }
       if (L.type === 'img'){
-        if (!L.img) h += `<div class="big-drop"><span>${L.slot === 'person' ? 'Hier kommt die Person hin.' : 'Hier kommt ein Bild hin.'}</span>${L.slot === 'person' ? btn('pickcut', 'Bild wählen und freistellen', 'primary') + btn('pick', 'Bild ohne Freistellen') : btn('pick', 'Bild wählen', 'primary') + btn('pickcut', 'Bild wählen und Person freistellen')}</div>`;
+        if (!L.img) h += `<div class="big-drop"><span>${L.slot === 'person' ? 'Hier kommt die Person hin.' : 'Hier kommt ein Bild hin.'}</span>${L.slot === 'person' ? btn('libperson', 'Person aus der Ablage', lib.some(i => i.kind === 'person' && i.pics.length) ? 'primary' : '') + btn('pickcut', 'Bild wählen und freistellen', lib.some(i => i.kind === 'person' && i.pics.length) ? '' : 'primary') + btn('pick', 'Bild ohne Freistellen') : btn('pick', 'Bild wählen', 'primary') + btn('pickcut', 'Bild wählen und Person freistellen') + btn('libgraphic', 'Aus der Ablage')}</div>`;
         else { h += `<div class="row wrap">${btn('pick', 'Bild ersetzen')}${L.mask ? btn('mask', 'Maske nachbessern') + btn('uncut', 'Freistellung aufheben') : btn('cut', 'Person freistellen', 'primary')}</div>`;
           h += fSeg(L, 'fit', 'Im Feld', [['contain', 'Ganz zeigen'], ['cover', 'Feld füllen']], 'cover') + fRange(L, 'zoom', 'Vergrößern', 1, 3, 0.01, 1) + fRange(L, 'pos.x', 'Lage waagerecht', 0, 1, 0.01, 0.5) + fRange(L, 'pos.y', 'Lage senkrecht', 0, 1, 0.01, 0.5);
           h += `<div class="row wrap">${fChk(L, 'flip', 'Spiegeln')}${fChk(L, 'gray', 'Schwarz-weiß')}</div>`;
           h += grp('Umriss und Schatten', fTog(L, 'outline', 'Umriss', {w: 9, c: PAL.cream}) + (L.outline ? fRange(L, 'outline.w', 'Stärke', 1, 40, 0.5, 9) + fColor(L, 'outline.c', 'Farbe') : '') + fTog(L, 'shadow', 'Schatten', {b: 40, x: 0, y: 14, c: 'rgba(0,0,0,0.45)'}));
+          h += grp('Ablage', `<div class="row wrap">${btn('tolib', 'In der Ablage hinterlegen')}${btn(L.slot === 'person' || L.mask ? 'libperson' : 'libgraphic', 'Aus der Ablage ersetzen')}</div>`);
           if (!L.mask) h += grp('Rahmen', fRange(L, 'round', 'Ecken runden', 0, Math.round(u * 0.3), 1, 0) + fTog(L, 'frame', 'Rahmen', {w: 10, c: PAL.cream}) + (L.frame ? fRange(L, 'frame.w', 'Stärke', 1, 40, 0.5, 10) + fColor(L, 'frame.c', 'Farbe') : '')); }
       }
       if (L.type === 'shape'){ h += `<label class="f"><span>Form</span><select data-k="shape">${H.SHAPES.map(x => `<option value="${x.k}"${x.k === L.shape ? ' selected' : ''}>${esc(x.n)}</option>`).join('')}</select></label>` + fColor(L, 'fill', 'Farbe', {def: doc.accent});
@@ -288,7 +431,11 @@
     else if (a === 'uncut'){ delete L.mask; if (L.src){ L.img = L.src; delete L.src; } commit(); inspector(); }
     else if (a === 'mask') maskDialog(L);
     else if (a === 'icon') iconDialog(ic => { L.icon = ic; commit(); inspector(); });
-    else if (a === 'del'){ doc.layers.splice(i, 1); selId = null; commit(); inspector(); }
+    else if (a === 'del'){ doc.layers.splice(i, 1); selId = null; if (L.top && L.band && doc.tpl) doc = H.retemplate(doc, doc.tpl); commit(); inspector(); }
+    else if (a === 'libperson') libDialog({kind: 'person', pick: async pic => { await putPerson(L, pic); commit(); select(L.id); }});
+    else if (a === 'libgraphic') libDialog({kind: 'graphic', pick: async it => { await setImage(L, it.img); commit(); select(L.id); }});
+    else if (a === 'lib-overlay') libDialog({kind: 'overlay'});
+    else if (a === 'tolib') toLibDialog(L);
     else if (a === 'dup'){ const c = H.clone(L); c.id = H.uid(); delete c.slot; c.user = true; c.x += 30; c.y += 30; doc.layers.splice(i + 1, 0, c); commit(); select(c.id); }
     else if (a === 'lock'){ L.lock = !L.lock; commit(); inspector(); }
     else if (a === 'up' || a === 'down'){ const j = a === 'up' ? i + 1 : i - 1; if (j < 1 || j >= doc.layers.length) return; doc.layers.splice(i, 1); doc.layers.splice(j, 0, L); commit(); }
@@ -321,12 +468,13 @@
   function tplGrid(){
     if (!doc || $('#tplGrid').offsetParent === null) return; const g = $('#tplGrid'), cont = H.contentOf(doc); g.innerHTML = '';
     for (const t of H.TEMPLATES){ const b = document.createElement('button'); b.dataset.t = t.id; b.className = t.id === doc.tpl ? 'on' : ''; b.title = t.n;
-      const d = H.fromTemplate(t.id, doc.format, cont, {accentKey: doc.accentKey, assets: doc.assets}); b.append(H.render(d, 240, {edit: true})); const s = document.createElement('span'); s.textContent = t.n; b.append(s); g.append(b); }
+      const d = H.fromTemplate(t.id, doc.format, cont, {accentKey: doc.accentKey, assets: doc.assets, extra: doc.layers.filter(L => L.top)}); b.append(H.render(d, 240, {edit: true})); const s = document.createElement('span'); s.textContent = t.n; b.append(s); g.append(b); }
   }
   $('#tplGrid').addEventListener('click', e => { const b = e.target.closest('[data-t]'); if (!b) return; doc = H.retemplate(doc, b.dataset.t); selId = null; commit(); inspector(); tplGrid(); toast('Vorlage „' + H.template(b.dataset.t).n + '“ – Texte und Bilder sind übernommen.'); });
   const GLYPH = {bg: '▦', text: 'T', img: '▣', shape: '◆', icon: '★'};
+  const glyph = L => L.top ? '⬓' : GLYPH[L.type];
   function layerList(){
-    if (!doc) return; $('#layerList').innerHTML = [...doc.layers].reverse().map(L => `<div class="lay${L.id === (selId || bgL().id) ? ' on' : ''}${L.hide ? ' off' : ''}" data-id="${L.id}"><span class="k">${GLYPH[L.type]}</span><span class="n">${esc(layerName(L))}</span>${L.type === 'bg' ? '' : `<button data-a="hide" title="${L.hide ? 'Einblenden' : 'Ausblenden'}" aria-label="${L.hide ? 'Einblenden' : 'Ausblenden'}">${L.hide ? '◌' : '●'}</button><button data-a="lock" title="${L.lock ? 'Entsperren' : 'Sperren'}" aria-label="${L.lock ? 'Entsperren' : 'Sperren'}">${L.lock ? '🔒' : '🔓'}</button>`}</div>`).join('');
+    if (!doc) return; $('#layerList').innerHTML = [...doc.layers].reverse().map(L => `<div class="lay${L.id === (selId || bgL().id) ? ' on' : ''}${L.hide ? ' off' : ''}" data-id="${L.id}"><span class="k"${L.top ? ' title="Auflage – liegt immer ganz oben"' : ''}>${glyph(L)}</span><span class="n">${esc(layerName(L))}</span>${L.type === 'bg' ? '' : `<button data-a="hide" title="${L.hide ? 'Einblenden' : 'Ausblenden'}" aria-label="${L.hide ? 'Einblenden' : 'Ausblenden'}">${L.hide ? '◌' : '●'}</button><button data-a="lock" title="${L.lock ? 'Entsperren' : 'Sperren'}" aria-label="${L.lock ? 'Entsperren' : 'Sperren'}">${L.lock ? '🔒' : '🔓'}</button>`}</div>`).join('');
   }
   $('#layerList').addEventListener('click', e => { const r = e.target.closest('.lay'); if (!r) return; const L = doc.layers.find(x => x.id === r.dataset.id), a = e.target.closest('[data-a]');
     if (a){ L[a.dataset.a] = !L[a.dataset.a]; commit(); inspector(); } else { select(L.type === 'bg' ? null : L.id); if (compact()) setMob('insp'); } });
@@ -356,7 +504,7 @@
 
   // ───────── Öffnen und Importieren ─────────
   async function importFile(file){
-    try { if (/\.(honeythumb|json)$/i.test(file.name)){ const d = H.parse(await file.text()); if (doc) await saveNow(); await openDoc(d, true); toast(`„${d.name}“ geöffnet`); }
+    try { if (/\.(honeythumb|json)$/i.test(file.name)){ const raw = JSON.parse(await file.text()); if (raw && raw.app === 'honeythumb-ablage') return void await libImport(raw); const d = H.parse(raw); if (doc) await saveNow(); await openDoc(d, true); toast(`„${d.name}“ geöffnet`); }
       else if (/^image\//.test(file.type) || /\.(png|jpe?g|webp|gif)$/i.test(file.name)){ busy('Lade Bild …'); const url = await normalize(file); busy('');
         if (doc){ const id = H.addAsset(doc, url); await H.load(doc); const im = H.imgOf(doc, id); addLayer(H.newLayer(doc, 'img', {img: id, ratio: im.naturalWidth / im.naturalHeight})); } else newDialog({url}); }
       else toast('Diese Datei kann HoneyThumb nicht öffnen.'); }
@@ -365,6 +513,7 @@
   $('#homeImport').onclick = () => { const i = $('#fileIn'); i.value = ''; i.click(); };
   $('#fileIn').addEventListener('change', e => { const f = e.target.files[0]; if (f) importFile(f); });
   $('#homeNew').onclick = $('#emptyNew').onclick = () => newDialog();
+  $('#homeLib').onclick = () => libDialog();
   const b64File = (name, b64) => { const bin = atob(b64), a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); const ext = (name.split('.').pop() || '').toLowerCase(), type = {png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif'}[ext] || ''; return new File([a], name, {type}); };
   window.HTImportB64 = (name, b64) => importFile(b64File(name, b64));
   window.HTImportText = () => toast('HoneyThumb öffnet Bilder und .honeythumb-Dateien.');
@@ -390,11 +539,12 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden && doc) saveNow(); });
 
   // Für Prüfläufe und Fehlersuche
-  window.HT = {get doc(){ return doc; }, get sel(){ return selId; }, select, commit, openDoc, showHome, newDialog, saveNow, Store, act, cutLayer, importFile, get scale(){ return sc; }};
+  window.HT = {get lib(){ return lib; }, libDialog, libSave, libAddImage, usePerson, useOverlay, useGraphic, libImport, libFile, setFormat,
+    get doc(){ return doc; }, get sel(){ return selId; }, select, commit, openDoc, showHome, newDialog, saveNow, Store, act, cutLayer, importFile, get scale(){ return sc; }};
 
   // ───────── Start ─────────
   (async () => {
-    await H.fonts(); await showHome();
+    await H.fonts(); await libReady(); await showHome();
     const o = location.hash.match(/open=([\w-]+=*)/);
     if (o && Store.desktop){ try { const f = await window.pywebview.api.open_file(o[1]); if (f) importFile(b64File(f.name, f.data)); } catch(e){ toast(e.message); } }
   })();

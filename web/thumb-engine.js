@@ -185,7 +185,7 @@
   function render(doc, W, o = {}){
     const F = format(doc.format), s = W / F.w, H = Math.round(F.h * s), c = o.canvas || mkCanvas(W, H); c.width = W; c.height = H;
     const ctx = c.getContext('2d'), acc = doc.accent || ACCENTS[0].dark, info = {shrunk: []};
-    for (const L of doc.layers){
+    for (const L of ordered(doc.layers)){
       if (L.hide || (o.only && o.only !== L.id)) continue;
       ctx.save(); ctx.globalAlpha = L.op == null ? 1 : clamp(L.op, 0, 1);
       if (L.type === 'bg'){ drawBg(ctx, doc, L, W, H, s, o); ctx.restore(); continue; }
@@ -201,6 +201,33 @@
     }
     c._info = info; return c;
   }
+  // ───────── Auflagen: Bilder aus der Ablage, die immer ganz oben liegen (top: true) ─────────
+  // band: deckende Streifen des Bildes oben und unten (Anteil der Bildhöhe), ar: Seitenverhältnis, fmts: Formate, für die die Auflage gilt
+  const ordered = layers => layers.some((L, i) => L.top && layers.slice(i + 1).some(M => !M.top)) ? [...layers.filter(L => !L.top), ...layers.filter(L => L.top)] : layers;
+  function pinTop(doc){ doc.layers = ordered(doc.layers); return doc; }
+  // Deckende Streifen eines Bildes: Zeilen von oben und von unten, die zu mehr als der Hälfte decken
+  function bandOf(im){
+    const iw = im.naturalWidth || im.width, ih = im.naturalHeight || im.height, w = 48, h = clamp(ih, 8, 480), c = mkCanvas(w, h), x = c.getContext('2d', {willReadFrequently: true});
+    x.drawImage(im, 0, 0, w, h); const d = x.getImageData(0, 0, w, h).data, row = y => { let n = 0; for (let i = 0; i < w; i++) if (d[(y * w + i) * 4 + 3] > 128) n++; return n > w / 2; };
+    let t = 0, b = 0; while (t < h && row(t)) t++; if (t >= h) return {t: 0, b: 0}; while (b < h && row(h - 1 - b)) b++;
+    return {t: Math.round(t / h * 1000) / 1000, b: Math.round(b / h * 1000) / 1000};
+  }
+  // Anteil des Titelbilds, den die Auflagen oben und unten verdecken – dort legen die Vorlagen nichts hin
+  function topInset(layers, F){
+    let t = 0, b = 0;
+    for (const L of layers || []){ if (!L.top || L.hide || !L.band || !L.ar) continue;
+      const r = fitRect(L.ar, 1, L.w, L.h, L), y0 = L.y + L.h / 2 + r.y;
+      if (L.band.t > 0) t = Math.max(t, Math.min(y0 + L.band.t * r.h, L.y + L.h) / F.h);
+      if (L.band.b > 0) b = Math.max(b, (F.h - Math.max(y0 + (1 - L.band.b) * r.h, L.y)) / F.h); }
+    t = clamp(t, 0, 1); b = clamp(b, 0, 1); return t + b > 0.6 ? {t: 0, b: 0} : {t, b};
+  }
+  const fullTop = (L, F) => { L.x = 0; L.y = 0; L.w = F.w; L.h = F.h; return L; };
+  // Neue Auflage: füllt das ganze Titelbild, ist gesperrt und liegt obenauf. o: {lib, name, fmts, band, ar}
+  function overlayLayer(fmt, img, o = {}){
+    const F = format(fmt), band = o.band || {t: 0, b: 0};
+    return fullTop({id: uid(), type: 'img', user: true, top: true, lock: true, img, fit: 'cover', pos: {x: 0.5, y: band.b > band.t ? 1 : band.t > band.b ? 0 : 0.5}, ...o, band}, F);
+  }
+
   // Oberste Ebene an einer Stelle (Entwurfspixel); gedrehte Kästen werden mitgedreht
   function inside(L, x, y, pad = 0){ const cx = L.x + L.w / 2, cy = L.y + L.h / 2, a = -(L.rot || 0) * Math.PI / 180, dx = x - cx, dy = y - cy, lx = dx * Math.cos(a) - dy * Math.sin(a), ly = dx * Math.sin(a) + dy * Math.cos(a); return Math.abs(lx) <= L.w / 2 + pad && Math.abs(ly) <= L.h / 2 + pad; }
   function hit(doc, x, y){ for (let i = doc.layers.length - 1; i >= 0; i--){ const L = doc.layers[i]; if (L.type === 'bg' || L.hide || L.lock) continue; if (inside(L, x, y, 6)) return L; } return null; }
@@ -335,7 +362,7 @@
   function derive(c){ const o = {...c}, auto = {}; if (!o.photo && o.person && o.person.img){ o.photo = o.person.src || o.person.img; auto.photo = true; } if (!(o.person && o.person.img) && o.photo){ o.person = {img: o.photo, mask: null}; auto.person = true; } return [o, auto]; }
   function fromTemplate(id, fmt, content0 = {}, base = {}){
     const [content, auto] = derive(content0);
-    const T = template(id) || TEMPLATES[0], F0 = format(fmt), F = {...F0, wide: F0.w / F0.h > 1.3}, a = accent(base.accentKey || 'rot'), C = {acc: a.dark, accL: a.light};
+    const T = template(id) || TEMPLATES[0], F0 = format(fmt), ins = topInset(base.extra, F0), fh = F0.h * (1 - ins.t - ins.b), oy = F0.h * ins.t, F = {...F0, h: fh, wide: F0.w / fh > 1.3}, a = accent(base.accentKey || 'rot'), C = {acc: a.dark, accL: a.light};
     const doc = {app: 'honeythumb', v: 1, id: base.id || uid(), name: base.name || 'Titelbild', format: F0.k, tpl: T.id, accentKey: a.k, accent: T.dark ? a.dark : a.light, assets: {...(base.assets || {})}, keep: {}, layers: [], updated: Date.now()};
     if (content.person && content.person.img && !auto.person) doc.keep.person = content.person; if (content.photo && !auto.photo) doc.keep.photo = content.photo;
     for (const k of ['title', 'kicker', 'sub']) if (content[k] != null) doc.keep[k] = content[k];   // Texte merken, auch wenn die Vorlage das Feld nicht hat
@@ -345,10 +372,13 @@
       else if (L.type === 'img'){ const c = content[L.slot]; if (L.slot === 'person' && c && c.img){ L.img = c.img; if (c.mask) L.mask = c.mask; if (c.src) L.src = c.src; } else if (c && L.slot !== 'person') L.img = c; if (L.img && auto[L.slot]) L.auto = true; }
       else if (L.type === 'text' && L.slot && content[L.slot] != null) L.text = content[L.slot];
       if (!L.slot) delete L.slot;
+      // Unter einer Auflage: die Vorlage rückt in die freie Fläche; Flächen am Rand reichen weiter bis zum Bildrand
+      if (L.type !== 'bg' && fh < F0.h){ const end = L.y + L.h >= fh - 1, start = L.y <= 1; L.y += oy;
+        if (L.type === 'shape' && L.shape === 'rect' && !L.rot){ if (end) L.h = F0.h - L.y; if (start){ L.h += L.y; L.y = 0; } } }
       doc.layers.push(L);
     }
     for (const L of base.extra || []) doc.layers.push(L);
-    return doc;
+    return pinTop(doc);
   }
   // Was in den Feldern steht – zum Wechsel der Vorlage oder des Formats
   function contentOf(doc){
@@ -362,8 +392,10 @@
   // Andere Vorlage und/oder anderes Format; eigene Ebenen (ohne Feld) wandern maßstäblich mit
   function retemplate(doc, id, fmt){
     const F1 = format(doc.format), F2 = format(fmt || doc.format), k = Math.min(F2.w / F1.w, F2.h / F1.h), dx = (F2.w - F1.w * k) / 2, dy = (F2.h - F1.h * k) / 2;
-    if (!id && !doc.tpl){ const d = clone(doc); d.format = F2.k; d.layers = doc.layers.map(L => L.type === 'bg' ? clone(L) : scaled(L, k, dx, dy)); d.updated = Date.now(); return d; }
-    const extra = doc.layers.filter(L => !L.slot && L.type !== 'bg' && L.user).map(L => scaled(L, k, dx, dy));
+    // Auflagen bleiben nur in ihren Formaten und füllen dort wieder das ganze Bild
+    const same = F1.k === F2.k, tops = doc.layers.filter(L => L.top && (same || !L.fmts || L.fmts.includes(F2.k))).map(L => same ? clone(L) : fullTop(clone(L), F2));
+    if (!id && !doc.tpl){ const d = clone(doc); d.format = F2.k; d.layers = [...doc.layers.filter(L => !L.top).map(L => L.type === 'bg' ? clone(L) : scaled(L, k, dx, dy)), ...tops]; d.updated = Date.now(); return prune(d); }
+    const extra = [...doc.layers.filter(L => !L.top && !L.slot && L.type !== 'bg' && L.user).map(L => scaled(L, k, dx, dy)), ...tops];
     const d = fromTemplate(id || doc.tpl, F2.k, contentOf(doc), {id: doc.id, name: doc.name, accentKey: doc.accentKey, assets: doc.assets, extra});
     return prune(d);
   }
@@ -395,9 +427,9 @@
       if (o.type === 'text'){ o.text = String(o.text || '').slice(0, 2000); o.size = num(o.size, 80, 6, 4000); }
       out.layers.push(o); }
     if (!out.layers.some(L => L.type === 'bg')) out.layers.unshift({id: uid(), type: 'bg', fill: {kind: 'color', c: PAL.ink}});
-    return prune(out);
+    return prune(pinTop(out));
   }
 
   G.HoneyThumb = {version: VERSION, PAL, ACCENTS, accent, FORMATS, format, FONTS, SHAPES, BG_KINDS, TEMPLATES, template, uid, clone, clamp, mix, rgba, lum,
-    decode, load, imgOf, addAsset, prune, fonts, cutout, render, hit, inside, textLayout, fromTemplate, contentOf, retemplate, recolor, newLayer, blank, parse, bgColor, mkCanvas};
+    decode, load, imgOf, addAsset, prune, fonts, cutout, render, ordered, pinTop, bandOf, topInset, overlayLayer, fitRect, hit, inside, textLayout, fromTemplate, contentOf, retemplate, recolor, newLayer, blank, parse, bgColor, mkCanvas};
 })();
