@@ -65,6 +65,102 @@ def webview2_version():
     return ""
 
 
+def haenger_beenden() -> int:
+    """Frühere Fenster von HoneyThumb beenden, die nicht mehr reagieren („Keine Rückmeldung“).
+
+    Ein hängengebliebenes HoneyThumb hält sein WebView2-Profil fest; jeder weitere Start wartet dann auf dieses Profil und
+    bleibt selbst stehen. Beendet werden nur Prozesse derselben Programmdatei, deren sichtbares Fenster Windows als hängend meldet."""
+    if sys.platform != "win32" or not FROZEN:
+        return 0
+    n = 0
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u, k = ctypes.windll.user32, ctypes.windll.kernel32
+        PROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        u.EnumWindows.argtypes = [PROC, wintypes.LPARAM]
+        u.IsWindowVisible.argtypes = [wintypes.HWND]
+        u.IsHungAppWindow.argtypes = [wintypes.HWND]
+        u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        k.OpenProcess.restype = wintypes.HANDLE
+        k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        k.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        ich, datei, pids = os.getpid(), os.path.normcase(sys.executable), set()
+
+        def fenster(hwnd, _):
+            try:
+                if u.IsWindowVisible(hwnd) and u.IsHungAppWindow(hwnd):
+                    pid = wintypes.DWORD(0)
+                    u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                    if pid.value and pid.value != ich:
+                        pids.add(pid.value)
+            except Exception:  # noqa: BLE001
+                pass
+            return True
+        u.EnumWindows(PROC(fenster), 0)
+        for pid in pids:
+            h = k.OpenProcess(0x1000 | 0x0001, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE
+            if not h:
+                continue
+            try:
+                buf, size = ctypes.create_unicode_buffer(1024), wintypes.DWORD(1024)
+                if k.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)) and os.path.normcase(buf.value) == datei:
+                    if k.TerminateProcess(h, 1):
+                        n += 1
+            finally:
+                k.CloseHandle(h)
+    except Exception as e:  # noqa: BLE001
+        note("Hänger beenden: Fehler", e)
+    return n
+
+
+_SPERRE = None   # offene Sperrdatei, solange dieses HoneyThumb läuft
+PENDING = DATA / "start.pending"   # liegt vom Start bis zum Laden der Seite; bleibt sie liegen, kam der letzte Start nicht durch
+
+
+def profil() -> Path:
+    """Ordner für das WebView2-Profil. In ihm liegt nichts Bleibendes (Titelbilder und Markenunterlagen stehen in store/).
+
+    Kam der letzte Start nicht bis zur geladenen Seite, wird das Profil verworfen. Läuft noch ein anderes HoneyThumb
+    (oder lässt sich das Profil nicht leeren), bekommt dieser Start ein eigenes, frisches Profil – so kann ihn nichts Altes aufhalten."""
+    global _SPERRE
+    import shutil
+    import tempfile
+    basis, allein = DATA / "webview", False
+    try:
+        import msvcrt
+        f = open(DATA / "run.lock", "a+")
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            _SPERRE, allein = f, True
+        except OSError:
+            f.close()
+    except ImportError:   # nicht unter Windows
+        allein = True
+    except Exception:  # noqa: BLE001
+        pass
+    if allein:
+        for alt in DATA.glob("webview-*"):   # Profile früherer Ausweich-Starts
+            shutil.rmtree(alt, ignore_errors=True)
+        if PENDING.is_file():
+            shutil.rmtree(basis, ignore_errors=True)
+            note("Letzter Start kam nicht durch – Profil verworfen:", "ja" if not basis.exists() else "nicht ganz")
+            if basis.exists():
+                allein = False
+    if not allein:
+        try:
+            basis = Path(tempfile.mkdtemp(prefix="webview-", dir=str(DATA)))
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        PENDING.write_text(str(os.getpid()), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+    return basis
+
+
 def fail(msg: str):
     try:
         import ctypes
@@ -261,9 +357,14 @@ def main():
         import webview
     except Exception:
         fail("pywebview fehlt – bitte HoneyThumb neu installieren.")
+    beendet = haenger_beenden()
+    if beendet:
+        import time
+        time.sleep(1.2)   # ihre WebView2-Prozesse beenden sich mit
+    ordner = profil()
     port = free_port()
     wv2 = webview2_version() if sys.platform == "win32" else "-"
-    note("Start", "Oberfläche:", WEB_DIR, "| Port:", port, "| WebView2:", wv2 or "nicht gefunden", "| pywebview:", getattr(webview, "__version__", "?"))
+    note("Start", "Oberfläche:", WEB_DIR, "| hängende Fenster beendet:", beendet, "| Profil:", ordner.name, "| Port:", port, "| WebView2:", wv2 or "nicht gefunden", "| pywebview:", getattr(webview, "__version__", "?"))
     srv = ThreadingHTTPServer(("127.0.0.1", port), Quiet)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
@@ -286,8 +387,12 @@ def main():
         except Exception:  # noqa: BLE001
             pass
         note("Seite geladen", "| Darstellung:", art)
+        try:
+            PENDING.unlink()
+        except Exception:  # noqa: BLE001
+            pass
     api.window.events.loaded += geladen
-    webview.start(private_mode=False, storage_path=str(DATA / "webview"))
+    webview.start(private_mode=False, storage_path=str(ordner))
 
 
 if __name__ == "__main__":
