@@ -11,8 +11,13 @@
   function busy(msg){ $('#busy').classList.toggle('hidden', !msg); if (msg) $('#busyMsg').textContent = msg; }
 
   // ───────── Ablage: Windows über das Programm, sonst IndexedDB ─────────
+  // Windows: Das Programm reicht den Speicher über seinen eigenen Server (/__store/…, mit dem Schlüssel k aus der Adresse).
+  // Die Brücke von pywebview ist für Megabytes zu langsam – mit ihr stand das Programm beim Öffnen, sobald Bilder hinterlegt waren.
   const Store = (() => {
     let api = null;
+    const KEY = (location.search.match(/[?&]k=([\w-]+)/) || [])[1] || '';
+    const http = DESKTOP && KEY ? async (op, q, body) => { const r = await fetch(`/__store/${op}?${q}`, {method: body == null ? 'GET' : 'POST', headers: {'X-HoneyThumb': KEY}, body, cache: 'no-store'}); if (!r.ok) throw new Error('Der Speicher antwortet nicht (' + r.status + ').'); return r; } : null;
+    const enc = encodeURIComponent;
     const ready = new Promise(res => {
       if (!DESKTOP) return res();
       if (window.pywebview && window.pywebview.api){ api = window.pywebview.api; return res(); }
@@ -23,11 +28,11 @@
     const db = () => dbP ||= new Promise((res, rej) => { const r = indexedDB.open('honeythumb', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
     const tx = async (mode, fn) => { const d = await db(); return new Promise((res, rej) => { const t = d.transaction('kv', mode), s = t.objectStore('kv'); const r = fn(s); t.oncomplete = () => res(r && r.result); t.onerror = () => rej(t.error); }); };
     return {
-      async get(k){ await ready; if (api){ const s = await api.store_get(k); return s ? JSON.parse(s) : null; } return tx('readonly', s => s.get(k)); },
-      async set(k, v){ await ready; if (api) return api.store_set(k, JSON.stringify(v)); return tx('readwrite', s => s.put(v, k)); },
-      async del(k){ await ready; if (api) return api.store_del(k); return tx('readwrite', s => s.delete(k)); },
-      async keys(prefix){ await ready; if (api) return (await api.store_keys(prefix)) || []; const all = await tx('readonly', s => s.getAllKeys()); return (all || []).filter(k => String(k).startsWith(prefix)); },
-      get desktop(){ return !!api; },
+      async get(k){ if (http){ const t = await (await http('get', 'key=' + enc(k))).text(); return t ? JSON.parse(t) : null; } await ready; if (api){ const s = await api.store_get(k); return s ? JSON.parse(s) : null; } return tx('readonly', s => s.get(k)); },
+      async set(k, v){ if (http) return void await http('set', 'key=' + enc(k), JSON.stringify(v)); await ready; if (api) return api.store_set(k, JSON.stringify(v)); return tx('readwrite', s => s.put(v, k)); },
+      async del(k){ if (http) return void await http('del', 'key=' + enc(k), ''); await ready; if (api) return api.store_del(k); return tx('readwrite', s => s.delete(k)); },
+      async keys(prefix){ if (http) return (await (await http('keys', 'prefix=' + enc(prefix))).json()) || []; await ready; if (api) return (await api.store_keys(prefix)) || []; const all = await tx('readonly', s => s.getAllKeys()); return (all || []).filter(k => String(k).startsWith(prefix)); },
+      get desktop(){ return !!api; }, ready,
     };
   })();
   const blobB64 = b => new Promise(res => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.readAsDataURL(b); });
@@ -84,7 +89,9 @@
   // ───────── Markenunterlagen: fest hinterlegte Bilder und die Akzentfarbe einer Marke ─────────
   // Eine Marke (z. B. der eigene Kanal oder eine Abgeordnete) trägt Personen (ein oder mehrere freigestellte Bilder), Auflagen (liegen immer ganz oben, je Format;
   // auf Wunsch bei jedem neuen Titelbild dabei), Grafiken (Logos, Wasserzeichen) und Hintergründe. Es gilt immer die gewählte Marke.
-  // Speicher des Geräts: „brand:ID“ je Marke, „lib:ID“ je Eintrag (mit brand), „set:brand“ die gewählte Marke. „Sichern“ schreibt eine Marke im Ganzen in eine Datei für ein anderes Gerät.
+  // Speicher des Geräts: „brand:ID“ je Marke, „set:brand“ die gewählte Marke, „lib:ID“ je Eintrag – nur das Leichte (Name, Marke, Vorschaubild, Einstellungen, v: 2).
+  // Bilder und Schriftdateien liegen getrennt unter „libd:ID“ (je Bild einer Person „libd:ID.BILD“) und werden erst gelesen, wenn sie gebraucht werden.
+  // So liest der Start nur Kleines – vorher las er alles und blieb mit vielen hinterlegten Bildern stehen. „Sichern“ schreibt eine Marke im Ganzen in eine Datei für ein anderes Gerät.
   const KINDS = [
     {k: 'person', n: 'Personen', one: 'Person', hint: 'Menschen, die regelmäßig auf deinen Titelbildern stehen. Je Person ein oder mehrere Bilder – ein Tipp setzt sie ins Titelbild.'},
     {k: 'overlay', n: 'Auflagen', one: 'Auflage', hint: 'Bilder, die immer ganz oben liegen, etwa ein Banner am unteren Rand. Durchsichtige Stellen lassen das Titelbild durch; die Vorlagen ordnen alles in der freien Fläche an.'},
@@ -93,34 +100,52 @@
     {k: 'font', n: 'Schriften', one: 'Schrift', hint: 'Eigene Schriftdateien (TTF, OTF, WOFF) – etwa die Schriften deines Kanals. Sie stehen bei jedem Text zur Wahl. „Titel“ und „Klein“ legen fest, welche Schrift die Pinselbalken-Vorlagen nehmen.'},
   ];
   let lib = [], libP = null, brands = [], brandId = null;
-  const brand = () => brands.find(b => b.id === brandId) || brands[0];
+  const brand = () => brands.find(b => b.id === brandId) || brands[0] || {id: null, name: 'Meine Marke', accentKey: 'rot'};
   const mine = k => lib.filter(i => i.brand === brandId && (!k || i.kind === k));
   async function brandSave(b){ const i = brands.findIndex(x => x.id === b.id); if (i < 0) brands.push(b); else brands[i] = b; brands.sort((a, c) => String(a.name).localeCompare(String(c.name), 'de')); await Store.set('brand:' + b.id, b); return b; }
-  async function brandUse(id){ brandId = id; await Store.set('set:brand', id); if (!doc) document.documentElement.style.setProperty('--acc', H.accent(brand().accentKey).dark); }
+  async function brandUse(id){ brandId = id; await Store.set('set:brand', id); if (!doc) document.documentElement.style.setProperty('--acc', H.accent(brand().accentKey).dark); await autoReady(); }
   async function brandDel(id){ for (const it of lib.filter(i => i.brand === id)) await libDel(it.id); brands = brands.filter(b => b.id !== id); await Store.del('brand:' + id); await brandUse(brands[0].id); }
   const DATA = /^data:image\/(png|jpeg|webp|gif);base64,/;
   const libSort = () => lib.sort((a, b) => String(a.name).localeCompare(String(b.name), 'de'));
-  // Beim Start: Einträge lesen und die Auflagen dekodieren (für die Vorschauen neuer Titelbilder)
-  function libReady(){ return libP ||= (async () => { for (const k of await Store.keys('lib:')){ try { const it = await Store.get(k); if (it && it.id && KINDS.some(x => x.k === it.kind)) lib.push(it); } catch(_){} }
+  const dKey = (it, pic) => 'libd:' + it.id + (pic ? '.' + pic.id : '');
+  async function heavy(it, pic){ const d = await Store.get(dKey(it, pic)); if (!d) throw new Error(`Die Daten zu „${it.name}“ fehlen auf diesem Gerät.`); return d; }
+  async function dataDel(id){ for (const k of await Store.keys('libd:' + id)) if (k === 'libd:' + id || k.startsWith('libd:' + id + '.')) await Store.del(k); }
+  // Vollständigen Eintrag (aus einer Datei oder aus 1.1–1.4) aufteilen: erst das Schwere ablegen, dann den leichten Eintrag
+  async function split(full){
+    const it = {...full, v: 2};
+    if (it.kind === 'person'){ it.pics = []; for (const q of full.pics || []){ if (!q || !q.img) continue; const id = q.id || H.uid(); await Store.set(dKey(it, {id}), {img: q.img, mask: q.mask || null, src: q.src || null}); it.pics.push({id, thumb: q.thumb || '', m: !!q.mask, s: !!q.src}); } }
+    else if (it.kind === 'font'){ await Store.set(dKey(it), {url: full.url}); delete it.url; }
+    else { await Store.set(dKey(it), {img: full.img}); delete it.img; }
+    await Store.set('lib:' + it.id, it); return it;
+  }
+  // Einträge lesen – nur das Leichte. Läuft nach dem Start im Hintergrund; alles, was die Einträge braucht, wartet darauf.
+  function libReady(){ return libP ||= (async () => {
     for (const k of await Store.keys('brand:')){ try { const b = await Store.get(k); if (b && b.id) brands.push(b); } catch(_){} }
     brandId = await Store.get('set:brand').catch(() => null);
     if (!brands.length) await brandSave({id: H.uid(), name: 'Meine Marke', accentKey: 'rot'});   // auch für Einträge aus 1.1.0, die noch keine Marke tragen
     if (!brands.some(b => b.id === brandId)) brandId = brands[0].id;
-    for (const it of lib) if (!brands.some(b => b.id === it.brand)){ it.brand = brandId; await Store.set('lib:' + it.id, it); }
-    for (const it of lib) if (it.kind === 'font') await H.addFont('u:' + it.id, it.name, it.url).catch(() => null);
-    libSort(); await Promise.all(lib.filter(i => i.kind === 'overlay').map(i => H.decode(i.img).catch(() => null))); })().catch(() => null); }
+    for (const k of await Store.keys('lib:')){ try { let it = await Store.get(k); if (!it || !it.id || !KINDS.some(x => x.k === it.kind)) continue;
+      if (it.v !== 2) it = await split(it);
+      if (!brands.some(b => b.id === it.brand)){ it.brand = brandId; await Store.set('lib:' + it.id, it); }
+      lib.push(it); } catch(_){} }
+    libSort(); })().catch(() => null); }
+  // Auflagen der gewählten Marke, die „immer dabei“ sind: Bild holen und dekodieren – für neue Titelbilder und ihre Vorschauen
+  const ovImg = new Map();
+  async function autoReady(){ await libReady(); for (const it of mine('overlay')){ if (!it.auto || ovImg.has(it.id)) continue; try { const d = await heavy(it); await H.decode(d.img); ovImg.set(it.id, d.img); } catch(_){} } }
+  // Eigene Schriften anmelden (im Hintergrund, eine nach der anderen)
+  async function fontsBg(){ await libReady(); for (const it of lib) if (it.kind === 'font' && !H.userFonts.has('u:' + it.id)){ try { await H.addFont('u:' + it.id, it.name, (await heavy(it)).url); } catch(_){} } if (doc) inspector(); }
   // Schriftdatei wählen und in die Markenunterlagen aufnehmen
   let fontRes = null;
   function pickFont(){ return new Promise(res => { fontRes = res; const i = $('#fontIn'); i.value = ''; i.click(); }); }
   $('#fontIn').addEventListener('change', e => { const f = e.target.files[0], res = fontRes; fontRes = null; if (res) res(f || null); });
   async function libAddFont(file){
     const ext = (file.name.split('.').pop() || '').toLowerCase(); if (!['ttf', 'otf', 'woff', 'woff2'].includes(ext)) throw new Error('HoneyThumb liest Schriften als TTF, OTF oder WOFF.'); if (file.size > 4e6) throw new Error('Die Schriftdatei ist größer als 4 MB.');
-    const id = H.uid(), url = `data:font/${ext};base64,` + await blobB64(file), name = file.name.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').slice(0, 60);
-    await H.addFont('u:' + id, name, url); return libSave({id, kind: 'font', name, url});
+    await libReady(); const id = H.uid(), url = `data:font/${ext};base64,` + await blobB64(file), name = file.name.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').slice(0, 60);
+    await H.addFont('u:' + id, name, url); await Store.set('libd:' + id, {url}); return libSave({id, kind: 'font', name, v: 2});
   }
   const fontsOf = () => { const f = brand().fonts || {}, ok = k => k && mine('font').some(i => 'u:' + i.id === k) ? k : null; return {title: ok(f.title), small: ok(f.small)}; };
   async function libSave(it){ it.updated = Date.now(); it.brand ||= brandId; const i = lib.findIndex(x => x.id === it.id); if (i < 0) lib.push(it); else lib[i] = it; libSort(); await Store.set('lib:' + it.id, it); return it; }
-  async function libDel(id){ lib = lib.filter(x => x.id !== id); await Store.del('lib:' + id); }
+  async function libDel(id){ lib = lib.filter(x => x.id !== id); ovImg.delete(id); await Store.del('lib:' + id); await dataDel(id); }
   // Kleines Vorschaubild (freigestellt, mit Transparenz)
   async function thumbOf(url, maskUrl){ const im = await H.decode(url), mk = maskUrl ? await H.decode(maskUrl) : null, src = H.cutout(im, mk), w = src.naturalWidth || src.width, h = src.naturalHeight || src.height, k = Math.min(1, 220 / Math.max(w, h)), c = H.mkCanvas(w * k, h * k);
     c.getContext('2d').drawImage(src, 0, 0, c.width, c.height); return c.toDataURL('image/png'); }
@@ -129,37 +154,37 @@
   const nearFmt = ar => H.FORMATS.reduce((a, f) => Math.abs(Math.log(f.w / f.h / ar)) < Math.abs(Math.log(a.w / a.h / ar)) ? f : a).k;
   // Bild in die Markenunterlagen aufnehmen. Person: freigestellte Bilder bleiben, wie sie sind; alle anderen werden freigestellt.
   async function libAddImage(kind, url, o = {}){
-    const im = await H.decode(url), ar = im.naturalWidth / im.naturalHeight, name = String(o.name || pickImage.last || KINDS.find(x => x.k === kind).one).slice(0, 60);
-    if (kind === 'person'){ let pic;
-      if (o.pic) pic = {id: H.uid(), ...o.pic};
-      else if (hasAlpha(im)) pic = {id: H.uid(), img: url, mask: null, src: null};
-      else { busy('Stelle die Person frei …'); try { const r = await CUT.person(im, {msg: busy}), c = CUT.crop(im, r.mask, r.box); pic = {id: H.uid(), img: c.img, mask: c.mask, src: url}; } finally { busy(''); } }
-      pic.thumb = await thumbOf(pic.img, pic.mask);
-      const it = (o.id && lib.find(x => x.id === o.id)) || {id: H.uid(), kind, name, pics: []}; it.pics.push(pic); return libSave(it); }
-    if (kind === 'overlay'){ const band = H.bandOf(im); return libSave({id: H.uid(), kind, name, img: url, ar, band, formats: [nearFmt(ar)], auto: true, thumb: await thumbOf(url)}); }
-    return libSave({id: H.uid(), kind, name, img: url, ar, thumb: await thumbOf(url)});
+    await libReady(); const im = await H.decode(url), ar = im.naturalWidth / im.naturalHeight, name = String(o.name || pickImage.last || KINDS.find(x => x.k === kind).one).slice(0, 60);
+    if (kind === 'person'){ let d;
+      if (o.pic) d = {img: o.pic.img, mask: o.pic.mask || null, src: o.pic.src || null};
+      else if (hasAlpha(im)) d = {img: url, mask: null, src: null};
+      else { busy('Stelle die Person frei …'); try { const r = await CUT.person(im, {msg: busy}), c = CUT.crop(im, r.mask, r.box); d = {img: c.img, mask: c.mask, src: url}; } finally { busy(''); } }
+      const it = (o.id && lib.find(x => x.id === o.id)) || {id: H.uid(), kind, name, pics: [], v: 2}, pic = {id: H.uid(), thumb: await thumbOf(d.img, d.mask), m: !!d.mask, s: !!d.src};
+      await Store.set(dKey(it, pic), d); it.pics.push(pic); return libSave(it); }
+    const it = kind === 'overlay' ? {id: H.uid(), kind, name, ar, band: H.bandOf(im), formats: [nearFmt(ar)], auto: true, thumb: await thumbOf(url), v: 2} : {id: H.uid(), kind, name, ar, thumb: await thumbOf(url), v: 2};
+    await Store.set(dKey(it), {img: url}); if (kind === 'overlay') ovImg.set(it.id, url); return libSave(it);
   }
   // Auflagen, die bei neuen Titelbildern dieses Formats immer dabei sind (ohne die, die das Titelbild schon trägt)
   function autoTops(fmt, have){ const holder = {assets: {}}, extra = [];
-    for (const it of mine('overlay')){ if (!it.auto || !(it.formats || []).includes(fmt) || !H.imgOf({assets: {x: it.img}}, 'x')) continue; if (have && have.layers.some(L => L.lib === it.id)) continue;
-      extra.push(H.overlayLayer(fmt, H.addAsset(holder, it.img), {lib: it.id, name: it.name, fmts: it.formats.slice(), band: it.band, ar: it.ar})); }
+    for (const it of mine('overlay')){ const img = ovImg.get(it.id); if (!it.auto || !(it.formats || []).includes(fmt) || !img) continue; if (have && have.layers.some(L => L.lib === it.id)) continue;
+      extra.push(H.overlayLayer(fmt, H.addAsset(holder, img), {lib: it.id, name: it.name, fmts: it.formats.slice(), band: it.band, ar: it.ar})); }
     return {assets: holder.assets, extra}; }
   // Einsetzen ins offene Titelbild
-  async function putPerson(L, pic){ L.img = H.addAsset(doc, pic.img); if (pic.mask) L.mask = H.addAsset(doc, pic.mask); else delete L.mask; if (pic.src) L.src = H.addAsset(doc, pic.src); else delete L.src; delete L.auto; await H.load(doc); return L; }
-  async function usePerson(pic){
+  async function putPerson(L, it, pic){ const d = await heavy(it, pic); L.img = H.addAsset(doc, d.img); if (d.mask) L.mask = H.addAsset(doc, d.mask); else delete L.mask; if (d.src) L.src = H.addAsset(doc, d.src); else delete L.src; delete L.auto; await H.load(doc); return L; }
+  async function usePerson(it, pic){
     let L = doc.layers.find(x => x.type === 'img' && x.slot === 'person' && (!x.img || x.auto));
-    if (L) await putPerson(L, pic);
-    else { L = await putPerson(H.newLayer(doc, 'img', {pos: {x: 0.5, y: 1}, outline: {w: 9, c: H.lum(H.bgColor(doc)) < 0.5 ? PAL.cream : PAL.ink}}), pic); const im = H.imgOf(doc, L.img); standPerson(L, im.naturalWidth / im.naturalHeight); doc.layers.push(L); }
+    if (L) await putPerson(L, it, pic);
+    else { L = await putPerson(H.newLayer(doc, 'img', {pos: {x: 0.5, y: 1}, outline: {w: 9, c: H.lum(H.bgColor(doc)) < 0.5 ? PAL.cream : PAL.ink}}), it, pic); const im = H.imgOf(doc, L.img); standPerson(L, im.naturalWidth / im.naturalHeight); doc.layers.push(L); }
     commit(); select(L.id); setMob('insp'); return L;
   }
   async function useOverlay(it){
     if (doc.layers.some(L => L.lib === it.id)) return void toast(`„${it.name}“ liegt schon auf diesem Titelbild.`);
-    const L = H.overlayLayer(doc.format, H.addAsset(doc, it.img), {lib: it.id, name: it.name, fmts: [...new Set([...(it.formats || []), doc.format])], band: it.band, ar: it.ar}); await H.load(doc); doc.layers.push(L);
+    const L = H.overlayLayer(doc.format, H.addAsset(doc, (await heavy(it)).img), {lib: it.id, name: it.name, fmts: [...new Set([...(it.formats || []), doc.format])], band: it.band, ar: it.ar}); await H.load(doc); doc.layers.push(L);
     const ins = H.topInset([L], F()); if (doc.tpl && ins.t + ins.b > 0){ doc = H.retemplate(doc, doc.tpl); toast(`„${it.name}“ liegt obenauf. Die Vorlage ist neu angeordnet, damit nichts darunter verschwindet.`); } else toast(`„${it.name}“ liegt obenauf.`);
     selId = null; commit(); inspector(); return L;
   }
-  async function useBg(it){ await setImage(bgL(), it.img); selId = null; commit(); inspector(); toast(`Hintergrund „${it.name}“ gesetzt.`); }
-  async function useGraphic(it){ const id = H.addAsset(doc, it.img); await H.load(doc); const im = H.imgOf(doc, id); return addLayer(H.newLayer(doc, 'img', {img: id, name: it.name, ratio: im.naturalWidth / im.naturalHeight})); }
+  async function useBg(it){ await setImage(bgL(), (await heavy(it)).img); selId = null; commit(); inspector(); toast(`Hintergrund „${it.name}“ gesetzt.`); }
+  async function useGraphic(it){ const id = H.addAsset(doc, (await heavy(it)).img); await H.load(doc); const im = H.imgOf(doc, id); return addLayer(H.newLayer(doc, 'img', {img: id, name: it.name, ratio: im.naturalWidth / im.naturalHeight})); }
 
   // Dialog der Markenunterlagen. o.kind: Reiter zu Beginn; o.pick(Bild der Person | Eintrag): statt ins Titelbild einzusetzen
   // Ansichten: Liste (Reiter), eine Person (open), die Marke selbst (view 'brand'), Eintrag in eine andere Marke legen (view 'move')
@@ -193,7 +218,7 @@
       c.innerHTML = h;
     };
     const fail = e => { busy(''); toast((e && e.message) || 'Das hat nicht geklappt.'); };
-    const use = async (it, pic) => { closeModal(); try { if (o.pick) await o.pick(pic || it); else if (it.kind === 'person') await usePerson(pic); else if (it.kind === 'overlay') await useOverlay(it); else if (it.kind === 'bg') await useBg(it); else await useGraphic(it); } catch(e){ fail(e); } };
+    const use = async (it, pic) => { closeModal(); try { if (o.pick) await o.pick(pic || it, it); else if (it.kind === 'person') await usePerson(it, pic); else if (it.kind === 'overlay') await useOverlay(it); else if (it.kind === 'bg') await useBg(it); else await useGraphic(it); } catch(e){ fail(e); } };
     c.addEventListener('click', async e => {
       const t = e.target, b = t.closest('[data-lb]'), a = b && b.dataset.lb, cd = t.closest('.lib-card'), it = cd && cd.dataset.li ? item(cd.dataset.li) : open ? item(open) : null;
       try {
@@ -208,12 +233,12 @@
         else if (t.closest('[data-lacc]')){ const B = brand(); B.accentKey = t.closest('[data-lacc]').dataset.lacc; await brandSave(B); await brandUse(B.id); paint(); }
         else if (t.closest('[data-lrole]')){ const B = brand(), r = t.closest('[data-lrole]').dataset.lrole, k = 'u:' + it.id; B.fonts = {...fontsOf()}; B.fonts[r] = B.fonts[r] === k ? null : k; await brandSave(B); paint(); }
         else if (a === 'move'){ mv = it.id; view = 'move'; paint(); }
-        else if (t.closest('[data-lmv]')){ const m = item(mv), to = brands.find(x => x.id === t.closest('[data-lmv]').dataset.lmv); m.brand = to.id; await libSave(m); view = ''; open = null; paint(); toast(`„${m.name}“ liegt jetzt bei „${to.name}“.`); }
+        else if (t.closest('[data-lmv]')){ const m = item(mv), to = brands.find(x => x.id === t.closest('[data-lmv]').dataset.lmv); m.brand = to.id; await libSave(m); ovImg.delete(m.id); await autoReady(); view = ''; open = null; paint(); toast(`„${m.name}“ liegt jetzt bei „${to.name}“.`); }
         else if (a === 'add'){ if (kind === 'person'){ const n = await libSave({id: H.uid(), kind, name: 'Neue Person', pics: []}); open = n.id; paint(); const i = $('#lbName'); i.focus(); i.select(); }
           else if (kind === 'font'){ const f = await pickFont(); if (!f) return; busy('Lade Schrift …'); await libAddFont(f); busy(''); paint(); if (doc) inspector(); }
           else { const url = await pickImage(); if (!url) return; await libAddImage(kind, url); paint(); if (kind === 'overlay') toast('Hinterlegt. Die Auflage ist bei neuen Titelbildern im passenden Format immer dabei.'); } }
         else if (a === 'addpic'){ const url = await pickImage(); if (!url) return; await libAddImage('person', url, {id: open}); paint(); }
-        else if (a === 'delpic'){ const p = item(open), q = cd.dataset.lp; if (confirm('Dieses Bild aus den Markenunterlagen löschen?')){ p.pics = p.pics.filter(x => x.id !== q); await libSave(p); paint(); } }
+        else if (a === 'delpic'){ const p = item(open), q = cd.dataset.lp; if (confirm('Dieses Bild aus den Markenunterlagen löschen?')){ p.pics = p.pics.filter(x => x.id !== q); await libSave(p); await Store.del(dKey(p, {id: q})); paint(); } }
         else if (a === 'delitem'){ if (it && confirm(`„${it.name}“ aus den Markenunterlagen löschen? Titelbilder, die es schon tragen, behalten es.`)){ await libDel(it.id); open = null; paint(); } }
         else if (a === 'edit'){ open = it.id; paint(); }
         else if (t.closest('[data-lf]')){ const f = t.closest('[data-lf]').dataset.lf; it.formats = (it.formats || []).includes(f) ? it.formats.filter(x => x !== f) : [...(it.formats || []), f]; await libSave(it); paint(); }
@@ -227,7 +252,7 @@
       else if (t.id === 'lbBName'){ const B = brand(); B.name = t.value.trim() || 'Marke'; await brandSave(B); }
       else if (t.id === 'lbName'){ const p = item(open); p.name = t.value.trim() || 'Person'; await libSave(p); }
       else if (t.dataset.ln){ const it = item(t.dataset.ln); it.name = t.value.trim() || K().one; await libSave(it); }
-      else if ('lauto' in t.dataset){ const it = item(t.closest('.lib-card').dataset.li); it.auto = t.checked; await libSave(it); } });
+      else if ('lauto' in t.dataset){ const it = item(t.closest('.lib-card').dataset.li); it.auto = t.checked; await libSave(it); await autoReady(); } });
     c.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.classList.contains('lib-card')) e.target.click(); else if (e.key === 'Enter' && e.target.tagName === 'INPUT') e.target.blur(); });
     libReady().then(paint);
   }
@@ -246,7 +271,16 @@
   }
   // Markenunterlagen als Datei: eine Marke im Ganzen sichern und einlesen (Marke und Einträge mit derselben Kennung werden ersetzt).
   // Gelesen werden auch Dateien aus 1.1.0 (ohne Marke): ihre Einträge kommen in die gewählte Marke.
-  async function brandFile(){ const B = brand(); await saveBlob(new Blob([JSON.stringify({app: 'honeythumb-marke', v: 1, brand: {id: B.id, name: B.name, accentKey: B.accentKey, fonts: fontsOf()}, items: mine()})], {type: 'application/json'}), `Markenunterlagen-${safeName(B.name)}.json`); }
+  async function brandFile(){ await libReady(); const B = brand(), items = [];
+    busy('Sichere die Markenunterlagen …');
+    try { for (const it of mine()){ const o = {...it}; delete o.v;
+        if (it.kind === 'person'){ o.pics = []; for (const q of it.pics){ const d = await heavy(it, q).catch(() => null); if (d) o.pics.push({id: q.id, thumb: q.thumb, img: d.img, mask: d.mask || null, src: d.src || null}); } }
+        else { const d = await heavy(it).catch(() => null); if (!d) continue; Object.assign(o, d); }
+        items.push(o); } }
+    finally { busy(''); }
+    await saveBlob(new Blob([JSON.stringify({app: 'honeythumb-marke', v: 1, brand: {id: B.id, name: B.name, accentKey: B.accentKey, fonts: fontsOf()}, items})], {type: 'application/json'}), `Markenunterlagen-${safeName(B.name)}.json`); }
+  // Vollständigen Eintrag aus einer Datei aufnehmen (ersetzt einen mit derselben Kennung samt seinen Daten)
+  async function libPutFull(full){ await dataDel(full.id); full.brand = brandId; full.updated = Date.now(); const it = await split(full), i = lib.findIndex(x => x.id === it.id); if (i < 0) lib.push(it); else lib[i] = it; ovImg.delete(it.id); libSort(); return it; }
   async function libImport(raw){
     await libReady(); const ID = /^[\w-]{1,40}$/, ok = u => typeof u === 'string' && DATA.test(u), opt = u => u == null || ok(u), str = (v, d) => String(v || d).slice(0, 60), ONE = {overlay: 'Auflage', graphic: 'Grafik', bg: 'Hintergrund'}; let n = 0, B = null;
     if (raw.app === 'honeythumb-marke' && raw.brand && typeof raw.brand.id === 'string' && ID.test(raw.brand.id)){ const rf = raw.brand.fonts || {}, fk = v => typeof v === 'string' && /^u:[\w-]{1,40}$/.test(v) ? v : null; B = await brandSave({id: raw.brand.id, name: str(raw.brand.name, 'Marke'), accentKey: H.accent(raw.brand.accentKey).k, fonts: {title: fk(rf.title), small: fk(rf.small)}}); await brandUse(B.id); }
@@ -255,7 +289,8 @@
       else if (r.kind === 'font' && typeof r.url === 'string' && H.FONT_URL.test(r.url)){ if (!await H.addFont('u:' + r.id, str(r.name, 'Schrift'), r.url).catch(() => null)) continue; it = {id: r.id, kind: 'font', name: str(r.name, 'Schrift'), url: r.url}; }
       else if (ONE[r.kind] && ok(r.img)){ const im = await H.decode(r.img).catch(() => null); if (!im) continue; it = {id: r.id, kind: r.kind, name: str(r.name, ONE[r.kind]), img: r.img, ar: im.naturalWidth / im.naturalHeight, thumb: ok(r.thumb) ? r.thumb : await thumbOf(r.img)};
         if (r.kind === 'overlay'){ it.band = H.bandOf(im); it.formats = (Array.isArray(r.formats) ? r.formats : []).filter(f => H.FORMATS.some(x => x.k === f)); it.auto = !!r.auto; } }
-      if (it){ it.brand = brandId; await libSave(it); n++; } }
+      if (it){ await libPutFull(it); n++; } }
+    await autoReady();
     const cnt = `${n} ${n === 1 ? 'Eintrag' : 'Einträge'}`;
     toast(B ? `Markenunterlagen „${B.name}“ eingelesen: ${cnt}.` : n ? `Eingelesen in „${brand().name}“: ${cnt}.` : 'In dieser Datei stehen keine Markenunterlagen.'); if (B || n) libDialog();
   }
@@ -275,7 +310,7 @@
       if (pre && pre.url){ const id = H.addAsset(d, pre.url); if (tpl) d = H.fromTemplate(tpl, fmt, {person: {img: id, mask: null}}, {id: d.id, assets: d.assets, extra: ax.extra, accentKey: ax.accentKey, fonts: ax.fonts}); else { await H.load(d); const im = H.imgOf(d, id); d.layers.push(H.newLayer(d, 'img', {img: id, ratio: im.naturalWidth / im.naturalHeight})); } }
       await openDoc(d, true); if (ax.extra.length) toast(`Auflage „${ax.extra.map(L => L.name).join('“, „')}“ ist dabei – sie liegt immer ganz oben.`);
       const p = doc.layers.find(L => L.type === 'img' && L.slot === 'person' && L.img && !L.mask); if (p){ select(p.id); await cutLayer(p, true); } };
-    H.fonts().then(libReady).then(paint);
+    H.fonts().then(autoReady).then(paint);
     c.addEventListener('click', e => { const f = e.target.closest('[data-f]'), t = e.target.closest('[data-t]'); if (f){ fmt = f.dataset.f; paint(); } else if (t) start(t.dataset.t); else if (e.target.id === 'ndBlank') start(null); else if (e.target.id === 'ndCancel') closeModal(); });
   }
 
@@ -488,8 +523,8 @@
     else if (a === 'mask') maskDialog(L);
     else if (a === 'icon') iconDialog(ic => { L.icon = ic; commit(); inspector(); });
     else if (a === 'del'){ doc.layers.splice(i, 1); selId = null; if (L.top && L.band && doc.tpl) doc = H.retemplate(doc, doc.tpl); commit(); inspector(); }
-    else if (a === 'libperson') libDialog({kind: 'person', pick: async pic => { await putPerson(L, pic); commit(); select(L.id); }});
-    else if (a === 'libgraphic') libDialog({kind: 'graphic', pick: async it => { await setImage(L, it.img); commit(); select(L.id); }});
+    else if (a === 'libperson') libDialog({kind: 'person', pick: async (pic, it) => { await putPerson(L, it, pic); commit(); select(L.id); }});
+    else if (a === 'libgraphic') libDialog({kind: 'graphic', pick: async it => { await setImage(L, (await heavy(it)).img); commit(); select(L.id); }});
     else if (a === 'lib-overlay') libDialog({kind: 'overlay'});
     else if (a === 'libbg') libDialog({kind: 'bg'});
     else if (a === 'seed'){ L.seed = 1 + Math.floor(Math.random() * 2e9); commit(); }
@@ -597,13 +632,16 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden && doc) saveNow(); });
 
   // Für Prüfläufe und Fehlersuche
-  window.HT = {get lib(){ return lib; }, libDialog, libSave, libAddImage, usePerson, useOverlay, useGraphic, libImport, libAddFont, brandFile, brandSave, brandUse, get brand(){ return brand(); }, get brands(){ return brands; }, mine, useBg, setFormat,
+  window.HT = {get lib(){ return lib; }, heavy, libReady, autoReady, libDialog, libSave, libAddImage, usePerson, useOverlay, useGraphic, libImport, libAddFont, brandFile, brandSave, brandUse, get brand(){ return brand(); }, get brands(){ return brands; }, mine, useBg, setFormat,
     get doc(){ return doc; }, get sel(){ return selId; }, select, commit, openDoc, showHome, newDialog, saveNow, Store, act, cutLayer, importFile, get scale(){ return sc; }};
 
   // ───────── Start ─────────
   (async () => {
-    await H.fonts(); await libReady(); await showHome();
+    // Der Start wartet auf nichts Schweres: Schriften höchstens kurz, die Übersicht sofort; Markenunterlagen kommen im Hintergrund
+    await Promise.race([H.fonts(), new Promise(r => setTimeout(r, 2500))]); await showHome();
+    libReady().then(() => { document.documentElement.style.setProperty('--acc', H.accent(brand().accentKey).dark); autoReady(); fontsBg(); });
     const o = location.hash.match(/open=([\w-]+=*)/);
+    if (o && DESKTOP) await Store.ready;
     if (o && Store.desktop){ try { const f = await window.pywebview.api.open_file(o[1]); if (f) importFile(b64File(f.name, f.data)); } catch(e){ toast(e.message); } }
   })();
 })();

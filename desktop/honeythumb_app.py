@@ -2,6 +2,9 @@
 HoneyThumb als Windows-Programm: eigenes Fenster (Edge WebView2) mit der gemeinsamen Oberfläche aus web/.
 
 Gespeichert wird in %APPDATA%\\HoneyThumb\\store (eine JSON-Datei je Titelbild) – unabhängig vom Fenster.
+Die Oberfläche liest und schreibt den Speicher über den eigenen Server (/__store/…): Die Brücke von pywebview ist für
+Megabytes zu langsam – mit ihr stand das Programm beim Öffnen, sobald Bilder hinterlegt waren. Der Server hört nur auf
+127.0.0.1 und verlangt den Schlüssel dieses Programmlaufs (TOKEN) als Kopfzeile, damit keine fremde Seite an den Speicher kommt.
 HoneyCut findet HoneyThumb über den Registry-Eintrag HKCU\\Software\\HoneyBalecta\\HoneyThumb\\WebDir (setzt der Installer)
 und kann dieselbe Oberfläche einbetten.
 """
@@ -10,12 +13,15 @@ from __future__ import annotations
 import base64
 import json
 import os
+import hmac
 import re
+import secrets
 import socket
 import sys
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -25,6 +31,7 @@ DATA = Path(os.environ.get("APPDATA") or Path.home()) / "HoneyThumb"
 STORE = DATA / "store"
 STORE.mkdir(parents=True, exist_ok=True)
 TITLE = "HoneyThumb"
+TOKEN = secrets.token_urlsafe(18)   # Schlüssel dieses Programmlaufs für /__store/
 
 
 def fail(msg: str):
@@ -40,34 +47,50 @@ def key_file(key: str) -> Path:
     return STORE / (re.sub(r"[^A-Za-z0-9_.-]", "_", key)[:120] + ".json")
 
 
+def store_get(key):
+    f = key_file(key)
+    return f.read_text(encoding="utf-8") if f.is_file() else None
+
+
+def store_set(key, value):
+    f = key_file(key)
+    tmp = f.with_name(f.name + ".tmp")
+    tmp.write_text(value, encoding="utf-8")
+    tmp.replace(f)
+    return True
+
+
+def store_del(key):
+    f = key_file(key)
+    if f.is_file():
+        f.unlink()
+    return True
+
+
+def store_keys(prefix):
+    out, pre = [], re.sub(r"[^A-Za-z0-9_.-]", "_", prefix)
+    for f in STORE.glob("*.json"):
+        k = f.name[:-5]   # nicht f.stem: Schlüssel wie libd_ID.BILD tragen selbst einen Punkt
+        if k.startswith(pre):
+            out.append(k.replace("_", ":", 1))   # thumb_ID → thumb:ID, meta_ID → meta:ID
+    return out
+
+
 class Api:
     """Aufrufbar aus der Oberfläche über window.pywebview.api."""
     window = None
 
     def store_get(self, key):
-        f = key_file(key)
-        return f.read_text(encoding="utf-8") if f.is_file() else None
+        return store_get(key)
 
     def store_set(self, key, value):
-        f = key_file(key)
-        tmp = f.with_suffix(".tmp")
-        tmp.write_text(value, encoding="utf-8")
-        tmp.replace(f)
-        return True
+        return store_set(key, value)
 
     def store_del(self, key):
-        f = key_file(key)
-        if f.is_file():
-            f.unlink()
-        return True
+        return store_del(key)
 
     def store_keys(self, prefix):
-        out = []
-        for f in STORE.glob("*.json"):
-            k = f.stem
-            if k.startswith(re.sub(r"[^A-Za-z0-9_.-]", "_", prefix)):
-                out.append(k.replace("_", ":", 1))   # thumb_ID → thumb:ID, meta_ID → meta:ID
-        return out
+        return store_keys(prefix)
 
     def open_file(self, b64path):
         """Beim Start übergebene Datei (Doppelklick auf .honeythumb, „Öffnen mit“) an die Oberfläche geben."""
@@ -91,13 +114,61 @@ class Api:
 
 class Quiet(SimpleHTTPRequestHandler):
     extensions_map = {**SimpleHTTPRequestHandler.extensions_map, ".js": "text/javascript", ".webmanifest": "application/manifest+json",
-                      ".ttf": "font/ttf", ".svg": "image/svg+xml"}
+                      ".ttf": "font/ttf", ".otf": "font/otf", ".svg": "image/svg+xml"}
 
     def __init__(self, *a, **k):
         super().__init__(*a, directory=str(WEB_DIR), **k)
 
     def log_message(self, *a):
         pass
+
+    # Speicher für die Oberfläche: nur mit dem Schlüssel dieses Programmlaufs und nur für Anfragen an 127.0.0.1
+    def _store(self, body=None):
+        u = urlsplit(self.path)
+        if not u.path.startswith("/__store/"):
+            return False
+        host = (self.headers.get("Host") or "").split(":")[0]
+        if host not in ("127.0.0.1", "localhost") or not hmac.compare_digest(self.headers.get("X-HoneyThumb") or "", TOKEN):
+            self.send_error(403)
+            return True
+        op, q = u.path[len("/__store/"):], parse_qs(u.query)
+        key, out, typ = (q.get("key") or [""])[0], b"", "application/json"
+        try:
+            if op == "get" and body is None:
+                out = (store_get(key) or "").encode("utf-8")
+            elif op == "keys" and body is None:
+                out = json.dumps(store_keys((q.get("prefix") or [""])[0])).encode("utf-8")
+            elif op == "set" and body is not None and key:
+                store_set(key, body.decode("utf-8"))
+            elif op == "del" and body is not None and key:
+                store_del(key)
+            else:
+                self.send_error(404)
+                return True
+        except Exception as e:  # noqa: BLE001
+            self.send_error(500, str(e)[:120])
+            return True
+        self.send_response(200)
+        self.send_header("Content-Type", typ + "; charset=utf-8")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        try:
+            self.wfile.write(out)
+        except ConnectionError:   # das Fenster hat die Anfrage abgebrochen (neu geladen, geschlossen)
+            pass
+        return True
+
+    def do_GET(self):
+        if not self._store():
+            super().do_GET()
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > 400_000_000:
+            self.send_error(413)
+            return
+        if not self._store(self.rfile.read(n)):
+            self.send_error(405)
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-cache")
@@ -168,7 +239,7 @@ def main():
     except Exception:
         pass
     api = Api()
-    url = f"http://127.0.0.1:{port}/index.html?desktop=1"
+    url = f"http://127.0.0.1:{port}/index.html?desktop=1&k={TOKEN}"
     if len(sys.argv) > 1 and Path(sys.argv[1]).is_file():   # „Öffnen mit“ / Doppelklick auf .honeythumb
         url += "#open=" + base64.urlsafe_b64encode(str(Path(sys.argv[1]).resolve()).encode()).decode()
     api.window = webview.create_window(TITLE, url, js_api=api, width=1440, height=900, min_size=(900, 600),

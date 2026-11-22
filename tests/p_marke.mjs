@@ -95,8 +95,8 @@ try {
 
   // ═════════ Personen ═════════
   const foto = await ev(FOTO);
-  const p1 = await ev(async ([foto, frei]) => { const a = await HT.libAddImage('person', foto, { name: 'Raphael' }), b = await HT.libAddImage('person', eval(frei), { id: a.id }); return { n: HT.lib.filter(i => i.kind === 'person').length, pics: b.pics.map(q => ({ mask: !!q.mask, src: !!q.src, thumb: /^data:image\/png/.test(q.thumb) })), name: b.name }; }, [foto, FREI]);
-  chk('Eine Person mit zwei Bildern: das Foto wird freigestellt (Maske und Original), das schon freigestellte PNG bleibt, wie es ist', p1.n === 1 && p1.name === 'Raphael' && p1.pics.length === 2 && p1.pics[0].mask && p1.pics[0].src && !p1.pics[1].mask && p1.pics.every(q => q.thumb), p1);
+  const p1 = await ev(async ([foto, frei]) => { const a = await HT.libAddImage('person', foto, { name: 'Raphael' }), b = await HT.libAddImage('person', eval(frei), { id: a.id }); return { n: HT.lib.filter(i => i.kind === 'person').length, pics: b.pics.map(q => ({ mask: !!q.m, src: !!q.s, leicht: !q.img && !q.mask && !q.src, thumb: /^data:image\/png/.test(q.thumb) })), name: b.name }; }, [foto, FREI]);
+  chk('Eine Person mit zwei Bildern: das Foto wird freigestellt (Maske und Original), das schon freigestellte PNG bleibt, wie es ist', p1.n === 1 && p1.name === 'Raphael' && p1.pics.length === 2 && p1.pics[0].mask && p1.pics[0].src && !p1.pics[1].mask && p1.pics.every(q => q.thumb && q.leicht), p1);
   await page.click('#tplGrid [data-t="rechts"]'); await sleep(250);
   await page.click('#addBar [data-add="lib"]'); await page.waitForSelector('.lib-card[data-li]');
   const c1 = await ev(() => { const c = document.querySelector('.lib-card'); return { name: c.querySelector('b').textContent, n: c.querySelector('.muted').textContent }; });
@@ -107,7 +107,7 @@ try {
   const u1 = await ev(() => { const l = HT.doc.layers.find(x => x.slot === 'person'); return { img: !!l.img, mask: !!l.mask, src: !!l.src, sel: HT.sel === l.id, modal: document.querySelector('#modal').classList.contains('hidden') }; });
   chk('Ein Tipp auf das Bild setzt die Person in das freie Feld der Vorlage – freigestellt, mit Original', u1.img && u1.mask && u1.src && u1.sel && u1.modal, u1);
   chk('Im Bild steht die Person (Blau des Oberkörpers) über dem Banner', near(await px(0.5, 0.74), [47, 75, 110], 45) && near(await px(0.05, 0.97), BLAU), await px(0.5, 0.74));
-  const u2 = await ev(async () => { const n = HT.doc.layers.length, F = HoneyThumb.format(HT.doc.format), l = await HT.usePerson(HT.lib.find(i => i.kind === 'person').pics[1]); return { more: HT.doc.layers.length - n, user: l.user, noMask: !l.mask, bottom: (l.y + l.h) / F.h, last: !!HT.doc.layers.at(-1).top, ratio: l.w / l.h }; });
+  const u2 = await ev(async () => { const n = HT.doc.layers.length, F = HoneyThumb.format(HT.doc.format), it = HT.lib.find(i => i.kind === 'person'), l = await HT.usePerson(it, it.pics[1]); return { more: HT.doc.layers.length - n, user: l.user, noMask: !l.mask, bottom: (l.y + l.h) / F.h, last: !!HT.doc.layers.at(-1).top, ratio: l.w / l.h }; });
   chk('Ist das Feld belegt, kommt die nächste Person als eigene Ebene dazu: unten an der Kante des Banners, unter der Auflage', u2.more === 1 && u2.user && u2.noMask && u2.bottom < 0.86 && u2.bottom > 0.78 && u2.last && Math.abs(u2.ratio - 0.5) < 0.01, u2);
   chk('Das zweite Bild (Magenta) ist im Titelbild zu sehen', near(await px(0.5, 0.6), [200, 60, 200], 40), await px(0.5, 0.6));
 
@@ -116,7 +116,7 @@ try {
   await page.click('#insp [data-act="tolib"]'); await page.waitForSelector('#tlName');
   chk('„In der Ablage hinterlegen“ bietet eine neue Person oder eine vorhandene an', await ev(() => document.querySelectorAll('[data-tp]').length === 1 && document.querySelector('[data-tp]').textContent === 'Raphael'));
   await page.fill('#tlName', 'Katrin'); await page.click('#tlOk'); await sleep(300);
-  const h1 = await ev(() => HT.lib.filter(i => i.kind === 'person').map(i => [i.name, i.pics.length, !!i.pics[0].mask]));
+  const h1 = await ev(() => HT.lib.filter(i => i.kind === 'person').map(i => [i.name, i.pics.length, !!i.pics[0].m]));
   chk('Die Person aus dem Titelbild liegt als neuer Eintrag in der Ablage', JSON.stringify(h1) === '[["Katrin",1,true],["Raphael",2,true]]', h1);
 
   // ═════════ Grafiken ═════════
@@ -145,8 +145,10 @@ try {
   await ev(() => document.querySelector('#edBack').click()); await page.waitForFunction(() => !document.querySelector('#home').classList.contains('hidden'));
 
   // ═════════ Ablage als Datei, Neustart ═════════
-  const file = await ev(() => JSON.stringify({ app: 'honeythumb-ablage', v: 1, items: HT.lib }));
-  await page.reload(); await page.waitForFunction(() => window.HT && !document.querySelector('#home').classList.contains('hidden'));
+  const file = await ev(async () => { const items = []; for (const it of HT.lib){ const o = { ...it }; delete o.v; if (it.kind === 'person'){ o.pics = []; for (const q of it.pics) o.pics.push({ id: q.id, thumb: q.thumb, ...(await HT.heavy(it, q)) }); } else Object.assign(o, await HT.heavy(it)); items.push(o); } return JSON.stringify({ app: 'honeythumb-ablage', v: 1, items }); });
+  await page.reload(); await page.waitForFunction(() => window.HT && !document.querySelector('#home').classList.contains('hidden')); await ev(() => HT.libReady());
+  const st = await ev(async () => ({ leicht: HT.lib.every(i => !i.img && !i.url && i.v === 2 && (i.pics || []).every(q => !q.img && !q.src)), gross: Math.max(...HT.lib.map(i => JSON.stringify({ ...i, thumb: '', pics: (i.pics || []).map(q => ({ ...q, thumb: '' })) }).length)), daten: !!(await HT.heavy(HT.lib.find(i => i.kind === 'overlay'))).img }));
+  chk('Beim Start liest das Programm nur die leichten Einträge; die Bilder liegen getrennt und kommen erst bei Bedarf', st.leicht && st.gross < 2000 && st.daten, st);
   const n1 = await ev(() => HT.lib.map(i => i.kind + ':' + i.name).sort());
   chk('Nach einem Neustart ist die Ablage noch da', n1.join() === 'graphic:Logo,overlay:Mission,person:Katrin,person:Raphael', n1);
   await page.click('#homeLib'); await page.click('[data-lb="edit"]'); page.once('dialog', d => d.accept()); await page.click('[data-lb="delitem"]'); await sleep(200);
@@ -201,10 +203,10 @@ try {
   await page.setInputFiles('#fileIn', datei); await sleep(400);
   chk('Dieselbe Datei ein zweites Mal einzulesen verdoppelt nichts', await ev(() => HT.brands.length === 2 && HT.mine().length === 2));
   // Einträge aus 1.1.0 tragen noch keine Marke; die gewählte Marke übersteht den Neustart
-  await ev(async () => { const it = HT.lib.find(i => i.kind === 'overlay'); delete it.brand; await HT.Store.set('lib:' + it.id, it); });
-  await page.reload(); await page.waitForFunction(() => window.HT && HT.brand && !document.querySelector('#home').classList.contains('hidden'));
-  const m5 = await ev(() => ({ name: HT.brand.name, ov: HT.lib.find(i => i.kind === 'overlay').brand === HT.brand.id, n: HT.brands.length }));
-  chk('Nach einem Neustart ist dieselbe Marke gewählt; ein Eintrag ohne Marke (aus 1.1.0) kommt in die gewählte', m5.name === 'Katrin Fey' && m5.ov && m5.n === 2, m5);
+  await ev(async () => { const it = HT.lib.find(i => i.kind === 'overlay'), d = await HT.heavy(it), alt = { ...it, img: d.img }; delete alt.v; delete alt.brand; await HT.Store.del('libd:' + it.id); await HT.Store.set('lib:' + it.id, alt); });   // Eintrag, wie 1.1–1.4 ihn abgelegt haben: alles in einem, ohne Marke
+  await page.reload(); await page.waitForFunction(() => window.HT && !document.querySelector('#home').classList.contains('hidden')); await ev(() => HT.libReady());
+  const m5 = await ev(async () => { const it = HT.lib.find(i => i.kind === 'overlay'), roh = await HT.Store.get('lib:' + it.id); return { name: HT.brand.name, ov: it.brand === HT.brand.id, n: HT.brands.length, v: roh.v === 2 && !roh.img, daten: /^data:image/.test((await HT.heavy(it)).img) }; });
+  chk('Nach einem Neustart ist dieselbe Marke gewählt; ein Eintrag aus 1.1–1.4 (alles in einem, ohne Marke) wird aufgeteilt und kommt in die gewählte Marke', m5.name === 'Katrin Fey' && m5.ov && m5.n === 2 && m5.v && m5.daten, m5);
 
   // ═════════ Pinselbalken-Vorlagen, raue Schrift, eigene Schriften ═════════
   await page.click('#homeNew'); await page.waitForSelector('#ndGrid canvas'); await page.click('#ndFmt [data-f="16:9"]'); await page.click('#ndGrid [data-t="pinsel"]'); await page.waitForFunction(() => HT.doc); await sleep(250);
