@@ -11,8 +11,8 @@
   function busy(msg){ $('#busy').classList.toggle('hidden', !msg); if (msg) $('#busyMsg').textContent = msg; }
 
   // ───────── Ablage: Windows über das Programm, sonst IndexedDB ─────────
-  // Windows: Das Programm reicht den Speicher über seinen eigenen Server (/__store/…, mit dem Schlüssel k aus der Adresse).
-  // Die Brücke von pywebview ist für Megabytes zu langsam – mit ihr stand das Programm beim Öffnen, sobald Bilder hinterlegt waren.
+  // Windows: Das Programm reicht Speicher, „Speichern unter“ und die beim Start übergebene Datei über seinen eigenen Server (/__store/…, mit dem Schlüssel k aus der Adresse).
+  // Die Brücke von pywebview nutzt die Oberfläche nicht mehr: Für Megabytes ist sie zu langsam, und ihr Aufbau beim Laden der Seite hielt das Fenster an.
   const Store = (() => {
     let api = null;
     const KEY = (location.search.match(/[?&]k=([\w-]+)/) || [])[1] || '';
@@ -32,11 +32,12 @@
       async set(k, v){ if (http) return void await http('set', 'key=' + enc(k), JSON.stringify(v)); await ready; if (api) return api.store_set(k, JSON.stringify(v)); return tx('readwrite', s => s.put(v, k)); },
       async del(k){ if (http) return void await http('del', 'key=' + enc(k), ''); await ready; if (api) return api.store_del(k); return tx('readwrite', s => s.delete(k)); },
       async keys(prefix){ if (http) return (await (await http('keys', 'prefix=' + enc(prefix))).json()) || []; await ready; if (api) return (await api.store_keys(prefix)) || []; const all = await tx('readonly', s => s.getAllKeys()); return (all || []).filter(k => String(k).startsWith(prefix)); },
-      get desktop(){ return !!api; }, ready,
+      get desktop(){ return !!api; }, ready, http,
     };
   })();
   const blobB64 = b => new Promise(res => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.readAsDataURL(b); });
   async function saveBlob(blob, name){
+    if (Store.http){ const p = await (await Store.http('save', 'name=' + encodeURIComponent(name), blob)).text(); if (p) toast('Gespeichert: ' + p); return; }
     if (Store.desktop && window.pywebview.api.save_file){ const p = await window.pywebview.api.save_file(name, await blobB64(blob)); if (p) toast('Gespeichert: ' + p); return; }
     if (window.ThumbNative && window.ThumbNative.saveFile){ const r = window.ThumbNative.saveFile(name, blob.type || 'application/octet-stream', await blobB64(blob)); if (r) toast(r); return; }
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 30000); toast('Gespeichert: ' + name);
@@ -642,7 +643,7 @@
     showHome().catch(e => toast('Die Übersicht ließ sich nicht lesen: ' + ((e && e.message) || e)));   // die Übersicht steht sofort; ihr Inhalt folgt
     libReady().then(() => { document.documentElement.style.setProperty('--acc', H.accent(brand().accentKey).dark); autoReady(); fontsBg(); });
     const o = location.hash.match(/open=([\w-]+=*)/);
-    if (o && DESKTOP) await Store.ready;
-    if (o && Store.desktop){ try { const f = await window.pywebview.api.open_file(o[1]); if (f) importFile(b64File(f.name, f.data)); } catch(e){ toast(e.message); } }
+    if (o && Store.http){ try { const r = await Store.http('opened', ''); importFile(new File([await r.blob()], decodeURIComponent(r.headers.get('X-Name') || 'Datei'))); } catch(e){ toast('Die Datei ließ sich nicht öffnen.'); } }
+    else if (o && Store.desktop){ try { const f = await window.pywebview.api.open_file(o[1]); if (f) importFile(b64File(f.name, f.data)); } catch(e){ toast(e.message); } }
   })();
 })();

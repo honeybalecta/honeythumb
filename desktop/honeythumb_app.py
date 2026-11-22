@@ -10,7 +10,6 @@ und kann dieselbe Oberfläche einbetten.
 """
 from __future__ import annotations
 
-import base64
 import json
 import os
 import hmac
@@ -21,7 +20,7 @@ import sys
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -203,40 +202,32 @@ def store_keys(prefix):
     return out
 
 
-class Api:
-    """Aufrufbar aus der Oberfläche über window.pywebview.api."""
-    window = None
+# Das Fenster und die beim Start übergebene Datei. Bewusst KEIN Objekt für die Brücke von pywebview (js_api):
+# pywebview durchsucht ein solches Objekt beim Laden der Seite samt allen öffentlichen Eigenschaften – stand dort das Fenster
+# (api.window), lief die Suche durch das ganze native Windows-Fenster. Das hielt den Start an („Keine Rückmeldung“), sobald
+# die Seite währenddessen Anfragen stellte. Alles, was die Oberfläche vom Programm braucht, läuft über /__store/.
+_FENSTER = None
+_OFFEN: Path | None = None
 
-    def store_get(self, key):
-        return store_get(key)
 
-    def store_set(self, key, value):
-        return store_set(key, value)
-
-    def store_del(self, key):
-        return store_del(key)
-
-    def store_keys(self, prefix):
-        return store_keys(prefix)
-
-    def open_file(self, b64path):
-        """Beim Start übergebene Datei (Doppelklick auf .honeythumb, „Öffnen mit“) an die Oberfläche geben."""
-        p = Path(base64.urlsafe_b64decode(b64path.encode()).decode())
-        return {"name": p.name, "data": base64.b64encode(p.read_bytes()).decode()}
-
-    def save_file(self, name, b64):
-        import webview
-        ext = Path(name).suffix.lstrip(".") or "*"
-        try:
-            res = self.window.create_file_dialog(webview.SAVE_DIALOG, save_filename=name,
-                                                 file_types=(f"{ext.upper()}-Datei (*.{ext})", "Alle Dateien (*.*)"))
-        except Exception:
-            res = self.window.create_file_dialog(webview.SAVE_DIALOG, save_filename=name)
-        if not res:
-            return None
-        dest = res[0] if isinstance(res, (list, tuple)) else res
-        Path(dest).write_bytes(base64.b64decode(b64))
-        return dest
+def datei_sichern(name: str, daten: bytes) -> str:
+    """„Speichern unter“ zeigen und die Datei schreiben. Gibt den Pfad zurück, '' bei Abbruch."""
+    import webview
+    if _FENSTER is None:
+        raise RuntimeError("kein Fenster")
+    art = getattr(getattr(webview, "FileDialog", None), "SAVE", None)
+    if art is None:
+        art = getattr(webview, "SAVE_DIALOG")
+    ext = Path(name).suffix.lstrip(".") or "*"
+    try:
+        res = _FENSTER.create_file_dialog(art, save_filename=name, file_types=(f"{ext.upper()}-Datei (*.{ext})", "Alle Dateien (*.*)"))
+    except Exception:  # noqa: BLE001
+        res = _FENSTER.create_file_dialog(art, save_filename=name)
+    if not res:
+        return ""
+    dest = res[0] if isinstance(res, (list, tuple)) else res
+    Path(dest).write_bytes(daten)
+    return str(dest)
 
 
 class Quiet(SimpleHTTPRequestHandler):
@@ -259,12 +250,20 @@ class Quiet(SimpleHTTPRequestHandler):
             self.send_error(403)
             return True
         op, q = u.path[len("/__store/"):], parse_qs(u.query)
-        key, out, typ = (q.get("key") or [""])[0], b"", "application/json"
+        key, out, typ, extra = (q.get("key") or [""])[0], b"", "application/json", {}
         try:
             if op == "get" and body is None:
                 out = (store_get(key) or "").encode("utf-8")
             elif op == "keys" and body is None:
                 out = json.dumps(store_keys((q.get("prefix") or [""])[0])).encode("utf-8")
+            elif op == "opened" and body is None:   # beim Start übergebene Datei (Doppelklick auf .honeythumb, „Öffnen mit“)
+                if _OFFEN is None or not _OFFEN.is_file():
+                    self.send_error(404)
+                    return True
+                out, typ = _OFFEN.read_bytes(), "application/octet-stream"
+                extra = {"X-Name": quote(_OFFEN.name)}
+            elif op == "save" and body is not None:
+                out = datei_sichern(Path((q.get("name") or ["Datei"])[0]).name or "Datei", body).encode("utf-8")
             elif op == "set" and body is not None and key:
                 store_set(key, body.decode("utf-8"))
             elif op == "del" and body is not None and key:
@@ -278,6 +277,8 @@ class Quiet(SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", typ + "; charset=utf-8")
         self.send_header("Content-Length", str(len(out)))
+        for name, wert in extra.items():
+            self.send_header(name, wert)
         self.end_headers()
         try:
             self.wfile.write(out)
@@ -372,13 +373,14 @@ def main():
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("HoneyThumb.App")
     except Exception:
         pass
-    api = Api()
+    global _FENSTER, _OFFEN
     url = f"http://127.0.0.1:{port}/index.html?desktop=1&k={TOKEN}"
     if len(sys.argv) > 1 and Path(sys.argv[1]).is_file():   # „Öffnen mit“ / Doppelklick auf .honeythumb
-        url += "#open=" + base64.urlsafe_b64encode(str(Path(sys.argv[1]).resolve()).encode()).decode()
-    api.window = webview.create_window(TITLE, url, js_api=api, width=1440, height=900, min_size=(900, 600),
-                                       background_color="#131312", text_select=False)
-    api.window.events.shown += lambda: fenster_einrichten(api.window, TITLE, True)
+        _OFFEN = Path(sys.argv[1]).resolve()
+        url += "#open=1"
+    _FENSTER = webview.create_window(TITLE, url, width=1440, height=900, min_size=(900, 600), background_color="#131312", text_select=False)
+    fenster = _FENSTER
+    fenster.events.shown += lambda: fenster_einrichten(fenster, TITLE, True)
 
     def geladen():
         art = "?"
@@ -391,7 +393,7 @@ def main():
             PENDING.unlink()
         except Exception:  # noqa: BLE001
             pass
-    api.window.events.loaded += geladen
+    fenster.events.loaded += geladen
     webview.start(private_mode=False, storage_path=str(ordner))
 
 

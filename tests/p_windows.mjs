@@ -10,7 +10,7 @@ import sys, threading; sys.path.insert(0, ${JSON.stringify(path.join(root, 'desk
 import honeythumb_app as a
 from pathlib import Path
 from http.server import ThreadingHTTPServer
-a.WEB_DIR = Path(${JSON.stringify(site)})
+a.WEB_DIR = Path(${JSON.stringify(site)}); a._OFFEN = Path(${JSON.stringify(path.join(data, 'Mein Titelbild ä.honeythumb'))})
 srv = ThreadingHTTPServer(("127.0.0.1", 0), a.Quiet); print(srv.server_address[1], a.TOKEN, flush=True); srv.serve_forever()
 `], { env: { ...process.env, APPDATA: data }, stdio: ['ignore', 'pipe', 'inherit'] });
 const [port, token] = await new Promise(res => py.stdout.once('data', d => res(String(d).trim().split(/\s+/))));
@@ -29,6 +29,15 @@ try {
   chk('Schreiben, Lesen, Auflisten und Löschen laufen über den Server – sechs Megabyte in unter zwei Sekunden; Schlüssel mit Punkt bleiben ganz', b1.s === 200 && b2.t === big && ms < 2000 && b3.t === '["libd:ab.cd"]' && b4.s === 200 && b4.t === '' && b5.s === 200 && b6.t === '[]', { ms, b3: b3.t, b4, b6: b6.t });
   const c1 = await call('/__store/get?key=../../x', { headers: H1 }), c2 = await call('/index.html');
   chk('Schlüssel führen nie aus dem Speicherordner heraus; die Oberfläche selbst kommt weiter ohne Schlüssel', c1.s === 200 && c1.t === '' && c2.s === 200 && /HoneyThumb/.test(c2.t), { c1: c1.s });
+
+  // ═════════ Ohne Brücke von pywebview: Öffnen und Speichern über den Server ═════════
+  const quell = fs.readFileSync(path.join(root, 'desktop', 'honeythumb_app.py'), 'utf8');
+  chk('Das Programm übergibt pywebview kein Objekt für die Brücke mehr (kein js_api=, kein öffentliches Fenster an einem solchen Objekt)', !/js_api\s*=/.test(quell) && !/class Api/.test(quell) && /create_window\(TITLE, url, width/.test(quell));
+  const d0 = await fetch(base + '/__store/opened', { headers: H1 });
+  fs.writeFileSync(path.join(data, 'Mein Titelbild ä.honeythumb'), '{"app":"honeythumb","x":1}');
+  const d1 = await fetch(base + '/__store/opened', { headers: H1 }), d1t = await d1.text(), d2 = await call('/__store/opened'), d3 = await call('/__store/save?name=x.png', { method: 'POST', headers: H1, body: 'abc' });
+  chk('Die beim Start übergebene Datei kommt über den Server – mit Namen, nur mit Schlüssel; ohne Fenster scheitert „Speichern unter“ sauber', d0.status === 404 && d1.status === 200 && d1t === '{"app":"honeythumb","x":1}' && decodeURIComponent(d1.headers.get('X-Name')) === 'Mein Titelbild ä.honeythumb' && d2.s === 403 && d3.s === 500, { d0: d0.status, d1: d1.status, n: d1.headers.get('X-Name'), d2: d2.s, d3: d3.s });
+  fs.rmSync(path.join(data, 'Mein Titelbild ä.honeythumb'));
 
   // ═════════ Die Oberfläche auf diesem Speicher ═════════
   let page; ({ browser, page, logs } = await launch({ url }));
