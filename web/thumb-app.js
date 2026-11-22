@@ -64,7 +64,7 @@
 
   // ───────── Übersicht ─────────
   async function showHome(){
-    doc = null; selId = null; $('#ed').classList.add('hidden'); $('#home').classList.remove('hidden');
+    doc = null; selId = null; $('#ed').classList.add('hidden'); $('#home').classList.remove('hidden'); if ($('#boot')) $('#boot').style.display = 'none';
     const metas = []; for (const k of await Store.keys('meta:')){ try { const m = await Store.get(k); if (m && m.id) metas.push(m); } catch(_){} }
     metas.sort((a, b) => (b.updated || 0) - (a.updated || 0));
     $('#homeEmpty').classList.toggle('hidden', metas.length > 0);
@@ -638,7 +638,8 @@
   // ───────── Start ─────────
   (async () => {
     // Der Start wartet auf nichts Schweres: Schriften höchstens kurz, die Übersicht sofort; Markenunterlagen kommen im Hintergrund
-    await Promise.race([H.fonts(), new Promise(r => setTimeout(r, 2500))]); await showHome();
+    await Promise.race([H.fonts(), new Promise(r => setTimeout(r, 2500))]);
+    showHome().catch(e => toast('Die Übersicht ließ sich nicht lesen: ' + ((e && e.message) || e)));   // die Übersicht steht sofort; ihr Inhalt folgt
     libReady().then(() => { document.documentElement.style.setProperty('--acc', H.accent(brand().accentKey).dark); autoReady(); fontsBg(); });
     const o = location.hash.match(/open=([\w-]+=*)/);
     if (o && DESKTOP) await Store.ready;

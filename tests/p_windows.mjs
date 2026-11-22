@@ -51,5 +51,15 @@ try {
   chk('Jeder weitere Start liest nur noch Kleines', zweit < 2500 && await ev(() => HT.lib.length === 10), { zweit });
   await page.click('#thumbList .thumb-card'); await page.waitForFunction(() => HT.doc && !document.querySelector('#ed').classList.contains('hidden'), null, { timeout: 15000 }); await sleep(300);
   chk('Das gespeicherte Titelbild öffnet sich wieder – mit Auflage und Person', await ev(() => !!HT.doc.layers.at(-1).top && HT.doc.layers.some(l => l.type === 'img' && l.mask && HT.doc.assets[l.img]) && Object.keys(HT.doc.assets).length >= 3));
+  // ═════════ Startanzeige ═════════
+  chk('Läuft das Programm, ist die Startanzeige weg', await ev(() => getComputedStyle(document.querySelector('#boot')).display === 'none' && !window.__htBoot.shown));
+  await page.route('**/thumb-engine.js', r => r.abort()); logs.length = 0;
+  await page.goto(url).catch(() => {}); await sleep(600);
+  const s0 = await ev(() => ({ text: document.querySelector('#bootBox').textContent, da: getComputedStyle(document.querySelector('#boot')).display }));
+  await page.waitForFunction(() => window.__htBoot && window.__htBoot.shown, null, { timeout: 12000 }); await sleep(400);
+  const s1 = await ev(() => document.querySelector('#bootBox').textContent), logf = path.join(store, 'log_start.json'), lg = fs.existsSync(logf) ? JSON.parse(fs.readFileSync(logf, 'utf8')) : null;
+  chk('Lädt eine Datei des Programms nicht, steht erst „HoneyThumb startet …“ da und nach wenigen Sekunden der Grund – mit der Datei, dem Fenster und einem Knopf „Neu laden“', /startet/.test(s0.text) && s0.da !== 'none' && /kommt nicht in Gang/.test(s1) && /Datei lädt nicht: thumb-engine\.js/.test(s1) && /Rechenkern nein/.test(s1) && /Chrome|Chromium/.test(s1) && await ev(() => !!document.querySelector('#bootBox button')), { s0, s1 });
+  chk('Der Grund steht danach auch im Speicherordner (log_start.json)', !!lg && lg.facts.some(f => /thumb-engine\.js/.test(f)), lg);
+  logs.length = 0; await page.unroute('**/thumb-engine.js');
 } catch (e) { chk('Der Lauf endet ohne Abbruch', false, String(e && e.stack || e)); }
 finally { if (browser) await browser.close().catch(() => {}); py.kill(); fs.rmSync(data, { recursive: true, force: true }); ende(logs); }

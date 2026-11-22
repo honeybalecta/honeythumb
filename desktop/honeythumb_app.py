@@ -34,6 +34,37 @@ TITLE = "HoneyThumb"
 TOKEN = secrets.token_urlsafe(18)   # Schlüssel dieses Programmlaufs für /__store/
 
 
+def note(*teile):
+    """Startprotokoll %APPDATA%\\HoneyThumb\\start.log (die letzten Läufe) – hilft, wenn das Fenster leer bleibt."""
+    try:
+        import datetime
+        f = DATA / "start.log"
+        alt = f.read_text(encoding="utf-8").splitlines()[-200:] if f.is_file() else []
+        f.write_text("\n".join(alt + [datetime.datetime.now().isoformat(timespec="seconds") + "  " + " ".join(str(t) for t in teile)]) + "\n", encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def webview2_version():
+    """Version der Laufzeit „Microsoft Edge WebView2“ aus der Registrierung, sonst ''."""
+    try:
+        import winreg
+        guid = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+        for root, pfad in ((winreg.HKEY_LOCAL_MACHINE, "SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\" + guid),
+                           (winreg.HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\" + guid),
+                           (winreg.HKEY_CURRENT_USER, "Software\\Microsoft\\EdgeUpdate\\Clients\\" + guid)):
+            try:
+                with winreg.OpenKey(root, pfad) as k:
+                    v = winreg.QueryValueEx(k, "pv")[0]
+                    if v and v != "0.0.0.0":
+                        return v
+            except OSError:
+                continue
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
 def fail(msg: str):
     try:
         import ctypes
@@ -231,6 +262,8 @@ def main():
     except Exception:
         fail("pywebview fehlt – bitte HoneyThumb neu installieren.")
     port = free_port()
+    wv2 = webview2_version() if sys.platform == "win32" else "-"
+    note("Start", "Oberfläche:", WEB_DIR, "| Port:", port, "| WebView2:", wv2 or "nicht gefunden", "| pywebview:", getattr(webview, "__version__", "?"))
     srv = ThreadingHTTPServer(("127.0.0.1", port), Quiet)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
@@ -245,6 +278,15 @@ def main():
     api.window = webview.create_window(TITLE, url, js_api=api, width=1440, height=900, min_size=(900, 600),
                                        background_color="#131312", text_select=False)
     api.window.events.shown += lambda: fenster_einrichten(api.window, TITLE, True)
+
+    def geladen():
+        art = "?"
+        try:
+            art = getattr(sys.modules.get("webview.platforms.winforms"), "renderer", "?")
+        except Exception:  # noqa: BLE001
+            pass
+        note("Seite geladen", "| Darstellung:", art)
+    api.window.events.loaded += geladen
     webview.start(private_mode=False, storage_path=str(DATA / "webview"))
 
 

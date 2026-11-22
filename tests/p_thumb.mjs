@@ -11,7 +11,7 @@ const near = (a, b, t = 28) => a.every((v, i) => Math.abs(v - b[i]) <= t);
 
 try {
   // ═════════ Übersicht und neues Titelbild ═════════
-  chk('Leere Übersicht mit Hinweis', await ev(() => !document.querySelector('#homeEmpty').classList.contains('hidden')));
+  chk('Leere Übersicht mit Hinweis', await page.waitForFunction(() => !document.querySelector('#homeEmpty').classList.contains('hidden'), null, { timeout: 3000 }).then(() => true, () => false));   // die Übersicht steht sofort, ihr Inhalt folgt
   await page.click('#emptyNew'); await page.waitForSelector('#ndGrid canvas');
   const nd = await ev(() => ({ n: document.querySelectorAll('#ndGrid button').length, fm: document.querySelectorAll('#ndFmt button').length, tall: (() => { document.querySelector('#ndFmt [data-f="9:16"]').click(); const c = document.querySelector('#ndGrid canvas'); return c.height > c.width; })() }));
   chk('Vierzehn Vorlagen, vier Formate; die Vorschauen folgen dem Format', nd.n === 14 && nd.fm === 4 && nd.tall, nd);
