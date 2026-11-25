@@ -1,0 +1,51 @@
+name: Diagnose Schrift im Export (Windows)
+
+on:
+  push:
+    branches: ["diag-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Oberfläche zusammenstellen
+        run: python build.py dist-web
+      - name: Abhängigkeiten
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install "pywebview>=5" pythonnet
+      - name: WebView2
+        shell: pwsh
+        run: |
+          Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue | Select-Object pv | Format-List
+      - name: Diagnose im echten Fenster (pywebview)
+        shell: pwsh
+        continue-on-error: true
+        run: python tests/diag/diag_fenster.py
+      - name: Diagnose in Edge
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          npm init -y | Out-Null
+          npm install playwright | Out-Null
+          $p = Start-Process python -ArgumentList "-m","http.server","8801","--directory","dist-web" -PassThru -WindowStyle Hidden
+          Start-Sleep 2
+          $env:HT_URL = "http://127.0.0.1:8801/index.html"
+          node tests/diag/diag_edge.mjs
+          Stop-Process -Id $p.Id -Force
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diag
+          path: diag-out
