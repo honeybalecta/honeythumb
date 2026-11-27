@@ -325,8 +325,9 @@
   }
   function fillBar(){
     $('#edName').value = doc.name; $('#edFmt').innerHTML = H.FORMATS.map(f => `<option value="${f.k}"${f.k === doc.format ? ' selected' : ''}>${esc(f.n)} – ${esc(f.hint)}</option>`).join('');
-    document.documentElement.style.setProperty('--acc', H.accent(doc.accentKey).dark);
+    document.documentElement.style.setProperty('--acc', H.accent(doc.accentKey).dark); guideBtn();
   }
+  $('#edGuide').addEventListener('click', () => setGuide(guide === '' ? '34' : guide === '34' ? 'quad' : ''));
   $('#edName').addEventListener('change', e => { doc.name = e.target.value.trim() || 'Titelbild'; e.target.value = doc.name; commit(); });
   function setFormat(k){ if (k === doc.format) return; const had = !!doc.tpl; doc = H.retemplate(doc, null, k);
     const ax = autoTops(k, doc); if (ax.extra.length){ Object.assign(doc.assets, ax.assets); doc.layers.push(...ax.extra); if (doc.tpl) doc = H.retemplate(doc, doc.tpl); }
@@ -347,8 +348,22 @@
     if (!doc) return; const w = $('#stageWrap').clientWidth, h = $('#stageWrap').clientHeight, f = F(); if (!w || !h) return;
     sc = Math.min(w / f.w, h / f.h); box.style.width = Math.floor(f.w * sc) + 'px'; box.style.height = Math.floor(f.h * sc) + 'px'; draw();
   }
+  // Raster-Ausschnitt: was Instagram und TikTok im Profilraster von einem Hochkantbild zeigen (mittig 3:4; „quad“ zusätzlich das mittige Quadrat).
+  // Nur eine Hilfe auf der Bühne – im Export und in der Vorschau steht sie nie.
+  let guide = '';
+  try { guide = localStorage.getItem('ht-guide') || ''; } catch(_){}
+  const guideFmt = () => !!doc && F().h > F().w;
+  function guideRects(W, Hh){ const r = [], fit = (ar, n) => { let w = W, h = W / ar; if (h > Hh){ h = Hh; w = Hh * ar; } r.push({x: (W - w) / 2, y: (Hh - h) / 2, w, h, n}); };
+    if (guide) fit(3 / 4, 'Raster 3:4 · Instagram, TikTok'); if (guide === 'quad') fit(1, 'Quadrat 1:1'); return r; }
+  function drawGuide(){ if (!guide || !guideFmt()) return; const x = stage.getContext('2d'), W = stage.width, Hh = stage.height, R = guideRects(W, Hh), u = Math.max(1, W / 450), a = R[0];
+    x.save(); x.fillStyle = 'rgba(19,19,18,0.5)'; x.fillRect(0, 0, W, a.y); x.fillRect(0, a.y + a.h, W, Hh - a.y - a.h); x.fillRect(0, a.y, a.x, a.h); x.fillRect(a.x + a.w, a.y, W - a.x - a.w, a.h);
+    R.forEach((q, i) => { x.setLineDash(i ? [6 * u, 5 * u] : []); x.lineWidth = 2 * u; x.strokeStyle = 'rgba(19,19,18,0.9)'; x.strokeRect(q.x + u, q.y + u, q.w - 2 * u, q.h - 2 * u); x.lineWidth = u; x.strokeStyle = '#EDE7DA'; x.strokeRect(q.x + u, q.y + u, q.w - 2 * u, q.h - 2 * u);
+      x.setLineDash([]); x.font = `600 ${Math.round(11 * u)}px Inter, system-ui, sans-serif`; x.textBaseline = 'top'; const tw = x.measureText(q.n).width; x.fillStyle = 'rgba(19,19,18,0.85)'; x.fillRect(q.x + 3 * u, q.y + 3 * u, tw + 10 * u, 17 * u); x.fillStyle = '#EDE7DA'; x.fillText(q.n, q.x + 8 * u, q.y + 6 * u); });
+    x.restore(); }
+  function guideBtn(){ const b = $('#edGuide'); if (!b) return; b.classList.toggle('hidden', !guideFmt()); b.classList.toggle('on', !!guide); b.title = 'Raster-Ausschnitt für Instagram und TikTok: ' + (guide === 'quad' ? '3:4 und Quadrat' : guide ? '3:4' : 'aus'); }
+  function setGuide(v){ guide = v; try { localStorage.setItem('ht-guide', v); } catch(_){} guideBtn(); draw(); if (v) toast(v === 'quad' ? 'Raster-Ausschnitt: 3:4 und das mittige Quadrat.' : 'Raster-Ausschnitt 3:4 – so zeigen Instagram und TikTok das Bild im Profilraster.'); }
   function draw(){ if (raf || !doc) return; raf = requestAnimationFrame(() => { raf = 0; if (!doc) return;
-    const px = Math.min(2200, Math.max(200, Math.round(box.clientWidth * (window.devicePixelRatio || 1)))); H.render(doc, px, {canvas: stage, edit: true}); placeSel();
+    const px = Math.min(2200, Math.max(200, Math.round(box.clientWidth * (window.devicePixelRatio || 1)))); H.render(doc, px, {canvas: stage, edit: true}); drawGuide(); guideBtn(); placeSel();
     const sh = stage._info.shrunk.length; $('#warn').classList.toggle('hidden', !sh); if (sh) $('#warn').textContent = 'Ein Text ist stark verkleinert, damit er in sein Feld passt. Kürze ihn oder ziehe das Feld größer.'; }); }
   function placeSel(){
     const L = cur(); selEl.classList.toggle('hidden', !L || L.type === 'bg' || !!L.hide); if (!L || L.type === 'bg') return;
@@ -468,7 +483,9 @@
       if (k === 'diag') h += fRange(L, 'fill.split', 'Teilung', 0.1, 0.9, 0.01, 0.5) + fRange(L, 'fill.slant', 'Schräge', -0.5, 0.5, 0.01, 0.16);
       if (k === 'dots') h += fRange(L, 'fill.step', 'Abstand', 20, 140, 2, 46);
       if (k === 'grid') h += fRange(L, 'fill.step', 'Abstand', 30, 240, 5, 80);
+      if (k === 'rauten') h += fRange(L, 'fill.step', 'Größe', 40, 400, 5, 150) + fRange(L, 'fill.tall', 'Höhe der Rauten', 0.8, 2.6, 0.05, 1.6) + fRange(L, 'fill.ang', 'Neigung', -45, 45, 1, 14);
       h += fRange(L, 'fill.vig', 'Ränder abdunkeln', 0, 0.9, 0.01, 0);
+      h += grp('Rahmen um das Titelbild', fTog(L, 'edge', 'Rahmen', {w: 6, c: H.lum(/^#[0-9a-f]{6}$/i.test(fl.a || '') ? fl.a : PAL.ink) < 0.5 ? PAL.cream : PAL.ink}) + (L.edge ? fRange(L, 'edge.w', 'Stärke', 1, 40, 0.5, 6) + fColor(L, 'edge.c', 'Farbe') : ''));
       h += `<p class="hint">Tippe im Bild auf einen Text oder ein Bild, um es zu bearbeiten.</p>`; }
     else {
       if (L.type === 'text'){
@@ -514,7 +531,7 @@
     if (t.tagName === 'SELECT'){ sp(L, t.dataset.k, t.value); commit(); return inspector(); }
     commit(); if (t.type === 'color') inspector(); });
   insp.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; const L = target();
-    if (b.dataset.k){ const v = JSON.parse(b.dataset.j); sp(L, b.dataset.k, v === null ? undefined : v); if (b.dataset.k === 'fill.kind' && v !== 'color' && v !== 'img' && !L.fill.b) L.fill.b = H.accent(doc.accentKey).light; commit(); inspector(); }
+    if (b.dataset.k){ const v = JSON.parse(b.dataset.j); sp(L, b.dataset.k, v === null ? undefined : v); if (b.dataset.k === 'fill.kind' && v === 'rauten' && !L.fill.b && (!L.fill.a || L.fill.a.toLowerCase() === PAL.ink.toLowerCase())){ L.fill.a = PAL.white; L.fill.b = '#0098D4'; } if (b.dataset.k === 'fill.kind' && v !== 'color' && v !== 'img' && !L.fill.b) L.fill.b = H.accent(doc.accentKey).light; commit(); inspector(); }
     else if (b.dataset.act) act(b.dataset.act); });
   async function act(a){
     const L = target(), f = F(), i = doc.layers.indexOf(L);
@@ -633,7 +650,7 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden && doc) saveNow(); });
 
   // Für Prüfläufe und Fehlersuche
-  window.HT = {get lib(){ return lib; }, heavy, libReady, autoReady, libDialog, libSave, libAddImage, usePerson, useOverlay, useGraphic, libImport, libAddFont, brandFile, brandSave, brandUse, get brand(){ return brand(); }, get brands(){ return brands; }, mine, useBg, setFormat,
+  window.HT = {get lib(){ return lib; }, setGuide, get guide(){ return guide; }, guideRects, heavy, libReady, autoReady, libDialog, libSave, libAddImage, usePerson, useOverlay, useGraphic, libImport, libAddFont, brandFile, brandSave, brandUse, get brand(){ return brand(); }, get brands(){ return brands; }, mine, useBg, setFormat,
     get doc(){ return doc; }, get sel(){ return selId; }, select, commit, openDoc, showHome, newDialog, saveNow, Store, act, cutLayer, importFile, get scale(){ return sc; }};
 
   // ───────── Start ─────────

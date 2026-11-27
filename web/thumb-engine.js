@@ -210,7 +210,7 @@
   }
 
   // ───────── Hintergrund ─────────
-  const BG_KINDS = [{k: 'color', n: 'Farbe'}, {k: 'grad', n: 'Verlauf'}, {k: 'img', n: 'Bild'}, {k: 'rays', n: 'Strahlen'}, {k: 'dots', n: 'Punkte'}, {k: 'diag', n: 'Schräg geteilt'}, {k: 'grid', n: 'Raster'}];
+  const BG_KINDS = [{k: 'color', n: 'Farbe'}, {k: 'grad', n: 'Verlauf'}, {k: 'img', n: 'Bild'}, {k: 'rays', n: 'Strahlen'}, {k: 'dots', n: 'Punkte'}, {k: 'diag', n: 'Schräg geteilt'}, {k: 'grid', n: 'Raster'}, {k: 'rauten', n: 'Rauten'}];
   function drawBg(ctx, doc, L, W, H, s, o){
     const f = L.fill || {kind: 'color', c: PAL.ink}, a = f.a || f.c || PAL.ink, b = f.b || PAL.ink2;
     ctx.fillStyle = a; ctx.fillRect(0, 0, W, H);
@@ -227,6 +227,12 @@
     else if (f.kind === 'dots'){ const st = (f.step || 46) * s; ctx.fillStyle = b; for (let y = 0, j = 0; y < H + st; y += st * 0.87, j++) for (let x = (j % 2) * st / 2; x < W + st; x += st){ const k = 0.12 + 0.3 * (y / H); ctx.beginPath(); ctx.arc(x, y, st * k, 0, Math.PI * 2); ctx.fill(); } }
     else if (f.kind === 'diag'){ const sp = (f.split == null ? 0.5 : f.split) * W, sl = (f.slant == null ? 0.16 : f.slant) * W; ctx.fillStyle = b; ctx.beginPath(); ctx.moveTo(sp + sl, 0); ctx.lineTo(W, 0); ctx.lineTo(W, H); ctx.lineTo(sp - sl, H); ctx.closePath(); ctx.fill(); }
     else if (f.kind === 'grid'){ const st = (f.step || 80) * s; ctx.strokeStyle = b; ctx.lineWidth = Math.max(1, 2 * s); ctx.beginPath(); for (let x = st; x < W; x += st){ ctx.moveTo(x, 0); ctx.lineTo(x, H); } for (let y = st; y < H; y += st){ ctx.moveTo(0, y); ctx.lineTo(W, y); } ctx.stroke(); }
+    else if (f.kind === 'rauten'){
+      // Rauten wie im bayerischen Wappen: schräg stehende, abwechselnd gefärbte Rauten – a ist der Grund, b jede zweite Raute
+      const w = (f.step || 150) * s, h = w * clamp(f.tall == null ? 1.6 : f.tall, 0.6, 3), n = Math.ceil(Math.hypot(W, H) / Math.min(w, h)) + 2;
+      ctx.save(); ctx.translate(W / 2, H / 2); ctx.rotate((f.ang == null ? 14 : f.ang) * Math.PI / 180); ctx.fillStyle = b; ctx.beginPath();
+      for (let i = -n; i <= n; i++) for (let j = -n; j <= n; j++){ if ((i + j) & 1) continue; const x = (i + j) * w / 2, y = (j - i) * h / 2; ctx.moveTo(x, y - h / 2); ctx.lineTo(x + w / 2, y); ctx.lineTo(x, y + h / 2); ctx.lineTo(x - w / 2, y); ctx.closePath(); }
+      ctx.fill(); ctx.restore(); }
     if (f.vig > 0){ const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.hypot(W, H) * 0.62); g.addColorStop(0, rgba(PAL.ink, 0)); g.addColorStop(1, rgba(PAL.ink, clamp(f.vig, 0, 1))); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); }
   }
 
@@ -249,6 +255,9 @@
       else if (L.type === 'icon' && IC()){ const d = Math.min(L.w, L.h) * s; IC().draw(ctx, L.icon, -d / 2, -d / 2, d, L.color || PAL.cream, L.accent || acc); }
       ctx.restore();
     }
+    // Rahmen um das ganze Titelbild (liegt am Hintergrund: edge = {w, c}); er liegt über allem, auch über Auflagen
+    const E = (doc.layers.find(L => L.type === 'bg') || {}).edge;
+    if (E && E.w > 0 && !o.only){ const ew = Math.max(1, E.w * s); ctx.save(); ctx.strokeStyle = E.c || PAL.cream; ctx.lineWidth = ew; ctx.strokeRect(ew / 2, ew / 2, W - ew, H - ew); ctx.restore(); }
     c._info = info; return c;
   }
   // ───────── Auflagen: Bilder aus der Ablage, die immer ganz oben liegen (top: true) ─────────
@@ -450,11 +459,12 @@
     const doc = {app: 'honeythumb', v: 1, id: base.id || uid(), name: base.name || 'Titelbild', format: F0.k, tpl: T.id, accentKey: a.k, accent: T.dark ? a.dark : a.light, assets: {...(base.assets || {})}, keep: {}, layers: [], updated: Date.now()};
     if (content.person && content.person.img && !auto.person) doc.keep.person = content.person; if (content.photo && !auto.photo) doc.keep.photo = content.photo;
     for (const k of ['title', 'kicker', 'sub']) if (content[k] != null) doc.keep[k] = content[k];   // Texte merken, auch wenn die Vorlage das Feld nicht hat
+    if (content.fonts && Object.keys(content.fonts).length) doc.keep.fonts = {...content.fonts};   // selbst gewählte Schriften je Feld
     for (const L of T.build(F, C)){
       L.id = uid();
       if (L.type === 'bg' && L.fill.slot){ L.slot = L.fill.slot; delete L.fill.slot; if (content[L.slot]){ L.fill.img = content[L.slot]; if (auto[L.slot]) L.auto = true; } }
       else if (L.type === 'img'){ const c = content[L.slot]; if (L.slot === 'person' && c && c.img){ L.img = c.img; if (c.mask) L.mask = c.mask; if (c.src) L.src = c.src; } else if (c && L.slot !== 'person') L.img = c; if (L.img && auto[L.slot]) L.auto = true; }
-      else if (L.type === 'text' && L.slot && content[L.slot] != null) L.text = content[L.slot];
+      else if (L.type === 'text' && L.slot){ if (content[L.slot] != null) L.text = content[L.slot]; const fo = content.fonts && content.fonts[L.slot]; if (fo && FONTS.some(x => x.k === fo)) L.font = fo; }
       if (!L.slot) delete L.slot;
       // Unter einer Auflage: die Vorlage rückt in die freie Fläche; Flächen am Rand reichen weiter bis zum Bildrand
       if (L.type !== 'bg' && fh < F0.h){ const end = L.y + L.h >= fh - 1, start = L.y <= 1; L.y += oy;
@@ -466,8 +476,11 @@
     return packFonts(pinTop(doc));
   }
   // Was in den Feldern steht – zum Wechsel der Vorlage oder des Formats
+  // fonts: je Feld die Schrift, die von der Vorlage abweicht – also selbst gewählt ist. Sie bleibt beim Wechsel von Vorlage, Format oder Auflage.
   function contentOf(doc){
-    const c = {...(doc.keep || {})};
+    const c = {...(doc.keep || {})}, fonts = {...(c.fonts || {})}, ref = doc.tpl && template(doc.tpl) ? fromTemplate(doc.tpl, doc.format, {}, {accentKey: doc.accentKey, fonts: doc.tfonts}) : null;
+    for (const L of doc.layers){ if (L.type !== 'text' || !L.slot || !ref) continue; const R = ref.layers.find(x => x.type === 'text' && x.slot === L.slot); if (R && L.font && L.font !== R.font) fonts[L.slot] = L.font; else if (fonts[L.slot] !== L.font) delete fonts[L.slot]; }   // gleich der Vorlagenschrift: nur dann eine eigene Wahl, wenn sie schon als solche gemerkt ist
+    if (Object.keys(fonts).length) c.fonts = fonts; else delete c.fonts;
     for (const L of doc.layers){ if (!L.slot) continue;
       if (L.type === 'text') c[L.slot] = L.text; else if (L.auto) continue; else if (L.type === 'bg'){ if (L.fill && L.fill.img) c[L.slot] = L.fill.img; }
       else if (L.type === 'img' && L.img) c[L.slot] = L.slot === 'person' ? {img: L.img, mask: L.mask || null, src: L.src || null} : L.img; }
@@ -482,6 +495,7 @@
     if (!id && !doc.tpl){ const d = clone(doc); d.format = F2.k; d.layers = [...doc.layers.filter(L => !L.top).map(L => L.type === 'bg' ? clone(L) : scaled(L, k, dx, dy)), ...tops]; d.updated = Date.now(); return prune(d); }
     const extra = [...doc.layers.filter(L => !L.top && !L.slot && L.type !== 'bg' && L.user).map(L => scaled(L, k, dx, dy)), ...tops];
     const d = fromTemplate(id || doc.tpl, F2.k, contentOf(doc), {id: doc.id, name: doc.name, accentKey: doc.accentKey, assets: doc.assets, extra, fonts: doc.tfonts}); if (doc.fonts) d.fonts = {...doc.fonts, ...(d.fonts || {})}; packFonts(d);
+    const e0 = (doc.layers.find(L => L.type === 'bg') || {}).edge, b1 = d.layers.find(L => L.type === 'bg'); if (e0 && b1) b1.edge = {...e0};
     return prune(d);
   }
   // Akzentfarbe tauschen: alle Stellen, die die bisherige Farbe (hell oder dunkel) tragen
